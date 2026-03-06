@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>地牢爬塔</title>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700&family=Cinzel:wght@700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<canvas id="particle-canvas"></canvas>
+
+<div id="app">
+
+  <!-- ── 标题界面 ───────────────────────────────────────── -->
+  <div id="screen-title" class="screen">
+    <div class="title-wrap">
+      <div class="title-deco">✦ ✦ ✦</div>
+      <h1 class="game-title">地牢爬塔</h1>
+      <p class="game-subtitle">深渊之下，荣耀之巅</p>
+      <button class="btn btn-primary btn-xl glow-pulse" id="btn-start">开始冒险</button>
+      <div class="title-hint">纯键盘 · 回合制 · 爬塔</div>
+    </div>
+  </div>
+
+  <!-- ── 角色创建 ──────────────────────────────────────── -->
+  <div id="screen-create" class="screen">
+    <div class="panel create-panel">
+      <h2 class="panel-title">⚔ 创建角色</h2>
+      <div class="name-row">
+        <label class="input-label">角色名称</label>
+        <input type="text" id="char-name" class="name-input" placeholder="输入名称…" maxlength="12" autocomplete="off">
+      </div>
+      <div class="section-label">选择职业</div>
+      <div class="class-grid" id="class-grid"></div>
+      <button class="btn btn-primary btn-lg" id="btn-create-confirm" disabled>确认创建 →</button>
+    </div>
+  </div>
+
+  <!-- ── 大厅界面 ──────────────────────────────────────── -->
+  <div id="screen-lobby" class="screen">
+    <div class="lobby-layout">
+      <!-- 层数进度 -->
+      <div class="floor-banner">
+        <span class="floor-title-text" id="lobby-floor-title">第 1 层</span>
+        <div class="floor-bar-wrap">
+          <div class="floor-bar-fill" id="floor-progress-fill"></div>
+        </div>
+        <span class="floor-count-text" id="floor-count">1 / 20</span>
+      </div>
+      <!-- 角色卡片 -->
+      <div class="char-card">
+        <div class="char-card-top">
+          <span class="char-name-big" id="lobby-char-name">勇士</span>
+          <span class="char-class-badge" id="lobby-char-class">战士 Lv.1</span>
+        </div>
+        <div class="hp-row">
+          <span class="stat-label-sm">HP</span>
+          <div class="hp-bar-outer"><div class="hp-bar-inner" id="lobby-hp-bar"></div></div>
+          <span class="hp-num" id="lobby-hp-text">150 / 150</span>
+        </div>
+        <div class="stats-chips">
+          <div class="chip chip-atk">⚔ <span id="lobby-attack">25</span></div>
+          <div class="chip chip-def">🛡 <span id="lobby-defense">15</span></div>
+          <div class="chip chip-gold">💰 <span id="lobby-gold">0</span></div>
+          <div class="chip chip-pot">🧪 <span id="lobby-potions">0</span></div>
+        </div>
+        <div class="equip-row" id="lobby-equip-row"></div>
+      </div>
+      <!-- 操作按钮 -->
+      <div class="lobby-actions">
+        <button class="btn btn-primary" id="btn-enter-floor">⚔ 进入本层</button>
+        <button class="btn btn-secondary" id="btn-open-bag">🎒 查看背包</button>
+        <button class="btn btn-danger" id="btn-quit-game">✕ 退出</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 战斗界面 ──────────────────────────────────────── -->
+  <div id="screen-combat" class="screen">
+    <div class="combat-layout">
+      <div class="combat-floor-badge" id="combat-floor-info">第 1 层</div>
+
+      <!-- 战斗竞技场 -->
+      <div class="combat-arena">
+        <!-- 玩家 -->
+        <div class="combatant-zone player-zone" id="player-zone">
+          <div class="combatant-entity" id="player-entity">
+            <div class="entity-glow entity-glow-player"></div>
+            <div class="entity-sprite" id="player-entity-icon">⚔</div>
+          </div>
+          <div class="combatant-name" id="player-combat-name">勇士</div>
+          <div class="hp-bar-outer combat-hp"><div class="hp-bar-inner" id="combat-player-hp-bar"></div></div>
+          <div class="hp-num" id="combat-player-hp-text">150 / 150</div>
+          <div class="combatant-stats" id="player-combat-stats">ATK 25 · DEF 15</div>
+        </div>
+
+        <!-- VS -->
+        <div class="arena-vs">
+          <div class="vs-text">VS</div>
+          <div class="vs-sparks"></div>
+        </div>
+
+        <!-- 怪物 -->
+        <div class="combatant-zone monster-zone" id="monster-zone">
+          <div class="combatant-entity" id="monster-entity">
+            <div class="entity-glow entity-glow-monster"></div>
+            <div class="entity-sprite" id="monster-entity-icon">👺</div>
+          </div>
+          <div class="combatant-name" id="monster-combat-name">史莱姆</div>
+          <div class="hp-bar-outer combat-hp"><div class="hp-bar-inner" id="combat-monster-hp-bar"></div></div>
+          <div class="hp-num" id="combat-monster-hp-text">30 / 30</div>
+          <div class="combatant-stats" id="monster-combat-stats">ATK 8 · DEF 2</div>
+        </div>
+      </div>
+
+      <!-- 战斗日志 -->
+      <div class="combat-log-wrap">
+        <div class="combat-log" id="combat-log"></div>
+      </div>
+
+      <!-- 行动按钮 -->
+      <div class="combat-actions" id="combat-actions">
+        <button class="btn btn-attack" id="btn-attack">⚔ 攻击</button>
+        <button class="btn btn-defend" id="btn-defend">🛡 防御</button>
+        <button class="btn btn-potion" id="btn-potion">🧪 药水 (0)</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 事件界面 ──────────────────────────────────────── -->
+  <div id="screen-event" class="screen">
+    <div class="event-panel" id="event-panel">
+      <div class="event-icon-big" id="event-icon">📦</div>
+      <h2 class="event-title" id="event-title">宝箱</h2>
+      <p class="event-desc" id="event-desc">你发现了一个宝箱…</p>
+      <div class="event-result" id="event-result"></div>
+      <div class="event-actions" id="event-actions"></div>
+    </div>
+  </div>
+
+  <!-- ── 结算界面 ──────────────────────────────────────── -->
+  <div id="screen-end" class="screen">
+    <div class="end-panel">
+      <div class="end-icon" id="end-icon">💀</div>
+      <h2 class="end-title" id="end-title">你倒在了第 3 层</h2>
+      <div class="end-stats" id="end-stats"></div>
+      <div class="end-log-wrap">
+        <div class="end-log-title">探索记录</div>
+        <div class="end-log" id="end-log"></div>
+      </div>
+      <button class="btn btn-primary btn-lg" id="btn-restart">再来一局</button>
+    </div>
+  </div>
+
+</div><!-- #app -->
+
+<!-- ── 背包模态框 ─────────────────────────────────────── -->
+<div id="modal-bag-overlay" class="modal-overlay" style="display:none">
+  <div class="modal-box" id="modal-bag">
+    <div class="modal-header">
+      <span class="modal-title">🎒 背包 / 装备</span>
+      <button class="modal-close" id="modal-bag-close">✕</button>
+    </div>
+    <div class="modal-body" id="modal-bag-body"></div>
+  </div>
+</div>
+
+<!-- ── 战利品模态框 ───────────────────────────────────── -->
+<div id="modal-loot" class="modal-overlay" style="display:none">
+  <div class="modal-box loot-box">
+    <div class="modal-header">
+      <span class="modal-title" id="loot-modal-title">装备掉落！</span>
+    </div>
+    <div class="modal-body" id="loot-modal-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" id="btn-loot-take">✨ 拾取</button>
+      <button class="btn btn-secondary" id="btn-loot-skip">放弃</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── 商人模态框 ─────────────────────────────────────── -->
+<div id="modal-merchant" class="modal-overlay" style="display:none">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="modal-title">🧙 神秘商人</span>
+      <span class="merchant-gold-badge">💰 <span id="merchant-gold-display">0</span></span>
+    </div>
+    <div class="modal-body" id="merchant-body"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="btn-merchant-leave">离开商店</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── 升级覆盖层 ─────────────────────────────────────── -->
+<div id="overlay-levelup" style="display:none">
+  <div class="levelup-content">
+    <div class="levelup-label">✦ 等级提升 ✦</div>
+    <div class="levelup-num" id="levelup-level">Lv. 2</div>
+    <div class="levelup-sub">属性提升，血量回满！</div>
+  </div>
+</div>
+
+<script src="js/audio.js"></script>
+<script src="js/particles.js"></script>
+<script src="js/game.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>
