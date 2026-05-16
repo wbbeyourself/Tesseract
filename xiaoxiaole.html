@@ -220,6 +220,32 @@ canvas#board {
   transform: translateY(-1px);
 }
 
+.footer-left {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.clear-btn {
+  display: none;
+  background: linear-gradient(135deg, #f9d423, #ff4e50);
+  border: none;
+  color: #fff;
+  padding: 8px 18px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.2s;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.clear-btn.show { display: block; }
+.clear-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 15px rgba(255,78,80,0.4);
+}
+
 @media (max-width: 550px) {
   .game-wrapper { padding: 16px; border-radius: 20px; }
   canvas#board { width: calc(100vw - 70px); height: calc(100vw - 70px); }
@@ -258,7 +284,10 @@ canvas#board {
   </div>
 
   <div class="footer">
-    <button class="restart-btn" id="restartBtn">🔄 重新开始</button>
+    <div class="footer-left">
+      <button class="restart-btn" id="restartBtn">🔄 重新开始</button>
+      <button class="clear-btn" id="clearBtn">消除 ✨</button>
+    </div>
     <div class="progress-bar">
       <div class="progress-fill" id="progressFill"></div>
     </div>
@@ -280,6 +309,7 @@ const overlayDesc = document.getElementById('overlayDesc');
 const overlayBtn = document.getElementById('overlayBtn');
 const progressFill = document.getElementById('progressFill');
 const remainLabel = document.getElementById('remainLabel');
+const clearBtn = document.getElementById('clearBtn');
 
 const COLS = 8;
 const ROWS = 8;
@@ -532,11 +562,7 @@ function handleCellClick(row, col) {
     if (canConnect(last.row, last.col, row, col)) {
       selectedGems.push({row, col});
       SoundFX.connect();
-
-      // 够 3 个 → 消除
-      if (selectedGems.length >= 3) {
-        clearSelectedGroup();
-      }
+      updateClearBtn();
       return;
     }
   }
@@ -547,11 +573,23 @@ function handleCellClick(row, col) {
   selectedGems.push({row, col});
   selectedType = type;
   SoundFX.select();
+  updateClearBtn();
 }
 
 function clearSelection() {
   selectedGems = [];
   selectedType = -1;
+  updateClearBtn();
+}
+
+function updateClearBtn() {
+  const n = selectedGems.length;
+  if (n >= 3) {
+    clearBtn.textContent = `消除 ${n} 个 ✨`;
+    clearBtn.classList.add('show');
+  } else {
+    clearBtn.classList.remove('show');
+  }
 }
 
 function clearSelectedGroup() {
@@ -823,6 +861,7 @@ function initGame() {
   clearingCells.clear();
   clearSelection();
   overlay.classList.remove('show');
+  updateClearBtn();
   createBoard();
   updateUI();
   startTimer();
@@ -856,6 +895,12 @@ document.getElementById('restartBtn').addEventListener('click', () => {
 });
 
 overlayBtn.addEventListener('click', initGame);
+
+clearBtn.addEventListener('click', () => {
+  if (selectedGems.length >= 3 && !isProcessing && !gameEnded) {
+    clearSelectedGroup();
+  }
+});
 
 </script>
 </body>
