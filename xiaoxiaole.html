@@ -262,6 +262,104 @@ const CLEAR_ANIM_DURATION = 350; // ms
 // combo tracking
 let comboCount = 0;
 
+// ========== 音效系统（Web Audio API，无需外部文件） ==========
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+
+function ensureAudio() {
+  if (!audioCtx) audioCtx = new AudioCtx();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+function playTone(freq, duration, type = 'sine', volume = 0.15) {
+  ensureAudio();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+  gain.gain.setValueAtTime(volume, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + duration);
+}
+
+function playNotes(notes, baseDelay = 0.07) {
+  ensureAudio();
+  notes.forEach(([freq, delay, type = 'sine', vol = 0.12]) => {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = type;
+    const t = audioCtx.currentTime + delay;
+    osc.frequency.setValueAtTime(freq, t);
+    gain.gain.setValueAtTime(vol, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start(t);
+    osc.stop(t + 0.15);
+  });
+}
+
+const SoundFX = {
+  select() {
+    playTone(660, 0.08, 'sine', 0.08);
+  },
+  swap() {
+    playTone(523, 0.1, 'sine', 0.1);
+    setTimeout(() => playTone(659, 0.1, 'sine', 0.1), 50);
+  },
+  match(count) {
+    if (count >= 5) {
+      playNotes([[523, 0], [659, 0.06], [784, 0.12], [1047, 0.18]], 0.06);
+    } else {
+      playTone(784, 0.12, 'sine', 0.12);
+      setTimeout(() => playTone(988, 0.12, 'sine', 0.1), 60);
+    }
+  },
+  combo(level) {
+    const base = 523 + level * 40;
+    playNotes([
+      [base, 0, 'sine', 0.1],
+      [base * 1.25, 0.07, 'sine', 0.1],
+      [base * 1.5, 0.14, 'sine', 0.12],
+      [base * 1.8, 0.21, 'triangle', 0.08],
+    ]);
+  },
+  refill() {
+    playNotes([
+      [660, 0, 'sine', 0.08],
+      [880, 0.08, 'sine', 0.08],
+      [1100, 0.16, 'sine', 0.1],
+      [1320, 0.24, 'triangle', 0.06],
+    ]);
+  },
+  shuffle() {
+    for (let i = 0; i < 8; i++) {
+      setTimeout(() => playTone(300 + Math.random() * 400, 0.06, 'sine', 0.05), i * 40);
+    }
+  },
+  gameOver() {
+    playNotes([
+      [784, 0, 'sine', 0.1],
+      [659, 0.2, 'sine', 0.1],
+      [523, 0.4, 'sine', 0.1],
+      [440, 0.6, 'triangle', 0.08],
+    ]);
+  },
+  invalid() {
+    playTone(200, 0.15, 'sawtooth', 0.06);
+  },
+  hint() {
+    playTone(1047, 0.06, 'sine', 0.07);
+    setTimeout(() => playTone(1319, 0.06, 'sine', 0.07), 70);
+  },
+  tick() {
+    playTone(800, 0.03, 'sine', 0.03);
+  },
+};
+
 // --- 工具 ---
 function rand(max) { return Math.floor(Math.random() * max); }
 
@@ -425,6 +523,7 @@ function startTimer() {
     if (isProcessing && comboCount > 0) return; // 连锁消除时时间照走但不动 UI
     timeLeft--;
     updateUI();
+    if (timeLeft <= 10 && timeLeft > 0) SoundFX.tick();
     if (timeLeft <= 0) {
       timeLeft = 0;
       updateUI();
@@ -454,9 +553,12 @@ function trySwap(r1, c1, r2, c2) {
   const matched = findMatches();
   if (matched.length === 0) {
     [board[r1][c1], board[r2][c2]] = [board[r2][c2], board[r1][c1]];
+    SoundFX.invalid();
     shakeCell(r2, c2);
     return;
   }
+
+  SoundFX.swap();
 
   isProcessing = true;
   comboCount = 0;
@@ -476,6 +578,13 @@ function processWithClearAnim(matched) {
   const points = base + extra + comboBonus;
   score += points;
   updateUI();
+
+  // 音效
+  if (comboCount >= 2) {
+    SoundFX.combo(comboCount);
+  } else {
+    SoundFX.match(matched.length);
+  }
 
   // combo 弹窗
   if (comboCount >= 2) {
@@ -506,6 +615,7 @@ function processWithClearAnim(matched) {
       const empty = countEmpty();
       if (empty >= REFILL_THRESHOLD) {
         showCombo('📦 补充!');
+        SoundFX.refill();
         setTimeout(() => {
           refillBoard();
           // 补充后检查新匹配
@@ -521,6 +631,7 @@ function processWithClearAnim(matched) {
       // 检查是否有可玩
       if (!hasValidMoves()) {
         showCombo('💫 洗牌');
+        SoundFX.shuffle();
         setTimeout(() => { shuffleBoard(); }, 500);
         return;
       }
@@ -562,6 +673,7 @@ function shuffleBoard() {
 
 // --- 游戏结束 ---
 function gameOver() {
+  SoundFX.gameOver();
   showCombo('⏰ 时间到!');
   setTimeout(() => {
     if (confirm(`⏰ 时间到！\n最终得分：${score}\n\n再来一局？`)) {
@@ -717,6 +829,7 @@ function showHint() {
   clearHint();
   const h = findHint();
   if (h) {
+    SoundFX.hint();
     hintCells = h;
     hintTimer = setTimeout(() => { hintCells = null; }, 2000);
   }
@@ -757,6 +870,7 @@ function handleClick(e) {
 
   if (!selectedCell) {
     selectedCell = { row, col };
+    SoundFX.select();
     return;
   }
 
@@ -772,6 +886,7 @@ function handleClick(e) {
     selectedCell = null;
   } else {
     selectedCell = { row, col };
+    SoundFX.select();
   }
 }
 
