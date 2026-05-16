@@ -298,9 +298,10 @@
     (function(){
         // ---------- 常量 ----------
         const CELL = 20, GRID = 36;
-        const SPEED_BASE = 160, SPEED_MIN = 60;
-        const LEVEL_SCORE = 80;
-        const GAME_DURATION = 180000; // 3 分钟
+        const SPEED_BASE = 130, SPEED_MIN = 55;
+        const LEVEL_SCORE = 50;
+        const GAME_DURATION = 90000; // 1 分 30 秒
+        const MAX_ITEMS = 25;
         const COMBO_TIMEOUT = 3000;
         const STORM_INTERVAL = 25000, STORM_DURATION = 3000, STORM_SPAWN_INTERVAL = 200, STORM_TOTAL_ITEMS = 18;
         const REVIVE_DELAY = 2000;
@@ -579,7 +580,10 @@
             return false;
         }
         function spawnFood(count){
-            for(let i=0;i<count;i++) spawnSingleItem();
+            let spawned = 0;
+            for(let i=0;i<count && items.length < MAX_ITEMS;i++){
+                if(spawnSingleItem()) spawned++;
+            }
         }
         
         function generateObstacles(levelNum){
