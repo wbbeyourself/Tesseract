@@ -380,6 +380,11 @@ const SoundFX = {
     ]);
   },
   invalid() { playTone(200, 0.15, 'sawtooth', 0.06); },
+  shuffle() {
+    for (let i = 0; i < 8; i++) {
+      setTimeout(() => playTone(300 + Math.random() * 400, 0.06, 'sine', 0.05), i * 40);
+    }
+  },
   tick() { playTone(800, 0.03, 'sine', 0.03); },
 };
 
@@ -420,44 +425,49 @@ function updateRemainUI() {
   remainLabel.textContent = `剩余 ${remain}`;
 }
 
-// --- 连连看路径检测 ---
+// --- 棋盘外也视为空位（经典连连看规则）---
+function isCellEmpty(r, c) {
+  if (r < 0 || r >= ROWS || c < 0 || c >= COLS) return true;
+  return board[r][c] === -1;
+}
+
 // 检查两点间直线是否畅通（不含端点）
 function isLineClear(r1, c1, r2, c2) {
   if (r1 === r2) {
     const minC = Math.min(c1, c2), maxC = Math.max(c1, c2);
     for (let c = minC + 1; c < maxC; c++)
-      if (board[r1][c] !== -1) return false;
+      if (!isCellEmpty(r1, c)) return false;
     return true;
   }
   if (c1 === c2) {
     const minR = Math.min(r1, r2), maxR = Math.max(r1, r2);
     for (let r = minR + 1; r < maxR; r++)
-      if (board[r][c1] !== -1) return false;
+      if (!isCellEmpty(r, c1)) return false;
     return true;
   }
   return false;
 }
 
-// 两点能否通过空位相连（直连 / 1 个拐角 / 2 个拐角）
+// 两点能否通过空位相连（直连 / 1 个拐角 / 2 个拐角，支持棋盘外）
 function canConnect(r1, c1, r2, c2) {
   if (r1 === r2 && c1 === c2) return false;
 
   // 0 拐角：直线
   if (isLineClear(r1, c1, r2, c2)) return true;
 
-  // 1 拐角：L 形
-  if (board[r1][c2] === -1 && isLineClear(r1, c1, r1, c2) && isLineClear(r1, c2, r2, c2)) return true;
-  if (board[r2][c1] === -1 && isLineClear(r1, c1, r2, c1) && isLineClear(r2, c1, r2, c2)) return true;
+  // 1 拐角：L 形（拐角可以出棋盘）
+  if (isCellEmpty(r1, c2) && isLineClear(r1, c1, r1, c2) && isLineClear(r1, c2, r2, c2)) return true;
+  if (isCellEmpty(r2, c1) && isLineClear(r1, c1, r2, c1) && isLineClear(r2, c1, r2, c2)) return true;
 
-  // 2 拐角：扫描行（竖→横→竖）
-  for (let r = 0; r < ROWS; r++) {
-    if (board[r][c1] !== -1 || board[r][c2] !== -1) continue;
+  // 2 拐角：扫描行 + 棋盘外行（-1 和 ROWS）
+  for (let r = -1; r <= ROWS; r++) {
+    if (!isCellEmpty(r, c1) || !isCellEmpty(r, c2)) continue;
     if (isLineClear(r1, c1, r, c1) && isLineClear(r, c1, r, c2) && isLineClear(r, c2, r2, c2))
       return true;
   }
-  // 2 拐角：扫描列（横→竖→横）
-  for (let c = 0; c < COLS; c++) {
-    if (board[r1][c] !== -1 || board[r2][c] !== -1) continue;
+  // 2 拐角：扫描列 + 棋盘外列（-1 和 COLS）
+  for (let c = -1; c <= COLS; c++) {
+    if (!isCellEmpty(r1, c) || !isCellEmpty(r2, c)) continue;
     if (isLineClear(r1, c1, r1, c) && isLineClear(r1, c, r2, c) && isLineClear(r2, c, r2, c2))
       return true;
   }
@@ -572,7 +582,6 @@ function clearSelectedGroup() {
       board[row][col] = -1;
     }
     clearingCells.clear();
-    isProcessing = false;
     updateRemainUI();
 
     // 检查胜利
@@ -583,12 +592,23 @@ function clearSelectedGroup() {
       return;
     }
 
-    // 检查是否无路可走（所有同色组都 < 3 个）
+    // 检查是否无路可走（没有 ≥3 个的同种元素）
     if (!hasAnyPlayableGroup()) {
-      gameEnded = true;
-      stopTimer();
-      gameLose();
+      showCombo('🔀 洗牌');
+      SoundFX.shuffle();
+      setTimeout(() => {
+        if (shuffleRemaining()) {
+          isProcessing = false;
+        } else {
+          // 洗了也救不活 → 真的结束了
+          gameEnded = true;
+          stopTimer();
+          gameLose();
+        }
+      }, 500);
+      return;
     }
+    isProcessing = false;
   }, CLEAR_ANIM_DURATION);
 }
 
@@ -599,6 +619,41 @@ function hasAnyPlayableGroup() {
     for (let c = 0; c < COLS; c++)
       if (board[r][c] !== -1) counts[board[r][c]]++;
   return counts.some(c => c >= 3);
+}
+
+// ========== Combo 弹窗 ==========
+function showCombo(text) {
+  comboPopup.textContent = text;
+  comboPopup.className = 'combo-popup';
+  void comboPopup.offsetWidth;
+  comboPopup.className = 'combo-popup show';
+}
+
+// ========== 死局洗牌 ==========
+function shuffleRemaining() {
+  // 收集剩余宝石的位置和类型
+  const cells = [], types = [];
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (board[r][c] !== -1) {
+        cells.push({row: r, col: c});
+        types.push(board[r][c]);
+      }
+    }
+  }
+  if (types.length < 3) return false; // 太少了，洗不活
+
+  // 费雪-耶茨打乱
+  for (let i = types.length - 1; i > 0; i--) {
+    const j = rand(i + 1);
+    [types[i], types[j]] = [types[j], types[i]];
+  }
+
+  for (let i = 0; i < cells.length; i++) {
+    board[cells[i].row][cells[i].col] = types[i];
+  }
+
+  return hasAnyPlayableGroup();
 }
 
 // ========== 胜利 / 失败 ==========
