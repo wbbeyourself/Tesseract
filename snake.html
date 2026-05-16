@@ -296,7 +296,7 @@
     (function(){
         // ---------- 常量 ----------
         const CELL = 20, GRID = 36;
-        const SPEED_BASE = 120, SPEED_MIN = 60;
+        const SPEED_BASE = 160, SPEED_MIN = 60;
         const LEVEL_SCORE = 80;
         const COMBO_TIMEOUT = 3000;
         const STORM_INTERVAL = 25000, STORM_DURATION = 3000, STORM_SPAWN_INTERVAL = 200, STORM_TOTAL_ITEMS = 18;
@@ -907,21 +907,35 @@
                 ctx.fillStyle=headGlow;
                 ctx.beginPath(); ctx.arc(x+CELL/2,y+CELL/2,CELL*1.2,0,Math.PI*2); ctx.fill();
             }
-            // 身体渐变
-            const grad = ctx.createLinearGradient(x,y,x+CELL,y+CELL);
-            const bright=isHead?'#66ee88':'#44cc66';
-            const dark=isHead?'#33aa55':'#228844';
-            grad.addColorStop(0,bright); grad.addColorStop(0.5,isHead?'#44dd77':'#33bb55'); grad.addColorStop(1,dark);
-            ctx.shadowBlur=isHead?10:4;
-            ctx.shadowColor='rgba(50,180,80,0.5)';
-            ctx.fillStyle=grad;
+            // 身体渐变 — 炫彩流光 tail
+            let bodyColor;
+            if(isHead) {
+                const grad = ctx.createLinearGradient(x,y,x+CELL,y+CELL);
+                grad.addColorStop(0,'#66ee88'); grad.addColorStop(0.5,'#44dd77'); grad.addColorStop(1,'#33aa55');
+                ctx.fillStyle=grad;
+            } else {
+                const hue = (t * 0.08 + idx * 18) % 360;
+                ctx.fillStyle = `hsl(${hue}, 85%, 60%)`;
+            }
+            ctx.shadowBlur=isHead?10:6;
+            ctx.shadowColor=isHead?'rgba(50,180,80,0.5)':`hsla(${(t*0.08+idx*18)%360},85%,60%,0.6)`;
             const pad=1;
             ctx.beginPath();
             if(isHead){
                 const r=4; ctx.moveTo(x+CELL-pad,y+pad+r); ctx.quadraticCurveTo(x+CELL-pad,y+pad,x+CELL-pad-r,y+pad); ctx.lineTo(x+pad+r,y+pad); ctx.quadraticCurveTo(x+pad,y+pad,x+pad,y+pad+r); ctx.lineTo(x+pad,y+CELL-pad-r); ctx.quadraticCurveTo(x+pad,y+CELL-pad,x+pad+r,y+CELL-pad); ctx.lineTo(x+CELL-pad-r,y+CELL-pad); ctx.quadraticCurveTo(x+CELL-pad,y+CELL-pad,x+CELL-pad,y+CELL-pad-r); ctx.closePath(); ctx.fill();
             } else {
-                ctx.shadowBlur=4;
-                ctx.fillRect(x+pad,y+pad,CELL-pad*2,CELL-pad*2);
+                const r=3;
+                ctx.beginPath();
+                ctx.moveTo(x+CELL-pad,y+pad+r);
+                ctx.quadraticCurveTo(x+CELL-pad,y+pad,x+CELL-pad-r,y+pad);
+                ctx.lineTo(x+pad+r,y+pad);
+                ctx.quadraticCurveTo(x+pad,y+pad,x+pad,y+pad+r);
+                ctx.lineTo(x+pad,y+CELL-pad-r);
+                ctx.quadraticCurveTo(x+pad,y+CELL-pad,x+pad+r,y+CELL-pad);
+                ctx.lineTo(x+CELL-pad-r,y+CELL-pad);
+                ctx.quadraticCurveTo(x+CELL-pad,y+CELL-pad,x+CELL-pad,y+CELL-pad-r);
+                ctx.closePath();
+                ctx.fill();
             }
             // 鳞片高光
             if(!isHead && idx%2===0){
