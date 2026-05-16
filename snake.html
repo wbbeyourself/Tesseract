@@ -256,6 +256,7 @@
             <div class="top-stat"><div class="stat-label">🏆 得分</div><div class="stat-value" id="score">0</div></div>
             <div class="top-stat"><div class="stat-label">⚡ 等级</div><div class="stat-value" id="level">1</div></div>
             <div class="top-stat"><div class="stat-label">🐍 长度</div><div class="stat-value" id="length">3</div></div>
+            <div class="top-stat"><div class="stat-label">⏱️ 剩余时间</div><div class="stat-value" id="timerDisplay">3:00</div></div>
         </div>
         <canvas id="gameCanvas" width="720" height="720"></canvas>
         <div class="control-hint">
@@ -269,7 +270,7 @@
             <div class="stat-card" id="highscoreCard" style="cursor:pointer;">👑 最高分 <span class="value" id="highscore">0</span></div>
             <button id="clearHistory">🗑️ 清除历史记录</button>
             <div class="stat-card">🔥 连击倍率 <span class="value" id="combo">x1.0</span><div class="combo-bar"><div class="combo-fill" id="comboFill" style="width:0%"></div></div></div>
-            <div class="stat-card">💚 复活次数 <span class="value" id="revives">2</span></div>
+            <div class="stat-card">💚 复活次数 <span class="value" id="revives">3</span></div>
         </div>
         <div class="panel">
             <h3>📈 下级进度</h3>
@@ -299,6 +300,7 @@
         const CELL = 20, GRID = 36;
         const SPEED_BASE = 160, SPEED_MIN = 60;
         const LEVEL_SCORE = 80;
+        const GAME_DURATION = 180000; // 3 分钟
         const COMBO_TIMEOUT = 3000;
         const STORM_INTERVAL = 25000, STORM_DURATION = 3000, STORM_SPAWN_INTERVAL = 200, STORM_TOTAL_ITEMS = 18;
         const REVIVE_DELAY = 2000;
@@ -329,16 +331,19 @@
         const levelProgressDiv = document.getElementById('levelProgress');
         const levelFillDiv = document.getElementById('levelFill');
         const buffsDiv = document.getElementById('buffs');
+        const timerSpan = document.getElementById('timerDisplay');
         
         // 游戏状态变量
         let snake = [];             // 坐标数组 {x,y}
         let direction = {x:1, y:0};
         let nextDirection = {x:1, y:0};
         let score = 0, level = 1, highScore = 0;
-        let revives = 2;
+        let revives = 3;
         let gameState = 'waiting'; // waiting, playing, paused, over, reviving
         let reviveCountdown = 0;
         let reviveIntervalId = null;
+
+        let gameTimer = GAME_DURATION;
         
         let items = [];             // 道具对象 {x,y,typeObj, spawnTime}
         let obstacles = [];         // 障碍物 {x,y}
@@ -455,6 +460,10 @@
             levelSpan.innerText = level;
             lengthSpan.innerText = snake.length;
             revivesSpan.innerText = revives;
+            let totalSec = Math.max(0, Math.ceil(gameTimer / 1000));
+            let min = Math.floor(totalSec / 60), sec = totalSec % 60;
+            timerSpan.innerText = `${min}:${sec.toString().padStart(2,'0')}`;
+            timerSpan.style.color = gameTimer < 30000 ? '#ff4444' : '';
             let needScore = level * LEVEL_SCORE;
             let progress = score - (level-1)*LEVEL_SCORE;
             let percent = Math.min(100, (progress/LEVEL_SCORE)*100);
@@ -779,8 +788,8 @@
             if(bombTimer>0) bombTimer -= 100; if(bombTimer<0) bombTimer=0;
         }
         
-        function triggerGameOver(){
-            if(revives > 0 && gameState !== 'reviving') {
+        function triggerGameOver(noRevive){
+            if(!noRevive && revives > 0 && gameState !== 'reviving') {
                 // 保存当前蛇的长度和方向，供复活使用
                 deathSnakeLength = snake.length;
                 deathDirection = {...direction};
@@ -866,7 +875,7 @@
             if(reviveIntervalId) clearInterval(reviveIntervalId);
             stormActive=false;
             gameState = 'waiting';
-            score=0; level=1; revives=2; combo=0; comboBurstNext=5; hungerTimer=0; hungerScoreDrain=0; clearAllBuffs();
+            score=0; level=1; revives=3; combo=0; comboBurstNext=5; hungerTimer=0; hungerScoreDrain=0; clearAllBuffs(); gameTimer=GAME_DURATION;
             obstacles=[]; items=[]; particles=[]; floatingTexts=[]; dangerZoneActive=false; nearMissStreak=0; lastNearMissTime=0;
             let center = {x:Math.floor(GRID/2), y:Math.floor(GRID/2)};
             snake = [{x:center.x,y:center.y},{x:center.x-1,y:center.y},{x:center.x-2,y:center.y}];
@@ -1217,8 +1226,9 @@
                 ctx.fillStyle='rgba(255,240,220,0.9)'; ctx.fillRect(0,0,720,720);
                 ctx.textAlign='center'; ctx.textBaseline='middle';
                 ctx.shadowBlur=12; ctx.shadowColor='rgba(200,100,50,0.3)';
-                ctx.fillStyle='#c07050'; ctx.font='bold 50px monospace';
-                ctx.fillText('GAME OVER',360,310);
+                const isTimeout = gameTimer <= 0;
+                ctx.fillStyle=isTimeout?'#4d96ff':'#c07050'; ctx.font='bold 50px monospace';
+                ctx.fillText(isTimeout?'⏱️ 时间到!':'GAME OVER',360,310);
                 ctx.shadowBlur=4; ctx.shadowColor='rgba(255,200,150,0.3)';
                 ctx.fillStyle='#ff8c00'; ctx.font='bold 28px "Segoe UI"';
                 ctx.fillText(`🏆 最终得分: ${score}`,360,380);
@@ -1290,7 +1300,14 @@
         document.getElementById('clearHistory').onclick=()=>{ localStorage.removeItem('snakeHighScore'); localStorage.removeItem('snakeGameHistory'); highScore=0; highScoreSpan.innerText=0; gameHistory=[]; };
         document.getElementById('highscoreCard').onclick=()=>{ alert(`🏆 历史最高分: ${highScore}\n📋 近期总局数: ${gameHistory.length}`); };
         loadStorage(); resetGame(); updateUI();
-        setInterval(()=>{ if(gameState==='playing' && !stormActive && stormTimer<=0){ startStorm(); stormTimer=STORM_INTERVAL; } else if(gameState==='playing') stormTimer-=100; }, 100);
+        setInterval(()=>{
+            if(gameState==='playing') {
+                gameTimer -= 100;
+                if(gameTimer <= 0) { gameTimer = 0; triggerGameOver(true); }
+                else updateUI();
+                if(!stormActive && stormTimer<=0){ startStorm(); stormTimer=STORM_INTERVAL; } else stormTimer-=100;
+            }
+        }, 100);
     })();
 </script>
 </body>
