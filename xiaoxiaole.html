@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>✨ 消消乐 ✨</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; user-select: none; }
+
+body {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  overflow: hidden;
+}
+
+.bg-particle {
+  position: fixed;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0.15;
+  animation: floatUp linear infinite;
+}
+@keyframes floatUp {
+  0% { transform: translateY(100vh) scale(0); opacity: 0; }
+  10% { opacity: 0.15; }
+  90% { opacity: 0.15; }
+  100% { transform: translateY(-10vh) scale(1); opacity: 0; }
+}
+
+.game-wrapper {
+  background: linear-gradient(145deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02));
+  backdrop-filter: blur(20px);
+  border-radius: 32px;
+  padding: 30px 35px 35px;
+  border: 1px solid rgba(255,255,255,0.12);
+  box-shadow: 0 25px 60px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.1);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding: 0 4px;
+}
+
+.title {
+  font-size: 28px;
+  font-weight: 700;
+  background: linear-gradient(90deg, #f9d423, #ff4e50);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: 2px;
+}
+
+.stats {
+  display: flex;
+  gap: 20px;
+}
+
+.stat-item {
+  text-align: center;
+}
+
+.stat-label {
+  font-size: 11px;
+  color: rgba(255,255,255,0.5);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1.3;
+}
+
+.stat-value.score {
+  background: linear-gradient(90deg, #f9d423, #f7971e);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.stat-value.time {
+  font-variant-numeric: tabular-nums;
+}
+.stat-value.time.warning { color: #ff6b6b; }
+
+.board-container {
+  position: relative;
+  border-radius: 18px;
+  background: rgba(0,0,0,0.3);
+  padding: 10px;
+  box-shadow: inset 0 2px 8px rgba(0,0,0,0.3);
+}
+
+canvas#board {
+  display: block;
+  width: 480px;
+  height: 480px;
+  border-radius: 12px;
+  cursor: pointer;
+  touch-action: none;
+}
+
+.combo-popup {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) scale(0);
+  font-size: 42px;
+  font-weight: 800;
+  pointer-events: none;
+  text-shadow: 0 4px 20px rgba(0,0,0,0.6);
+  opacity: 0;
+  transition: none;
+  white-space: nowrap;
+}
+.combo-popup.show {
+  animation: comboAnim 0.9s ease-out forwards;
+}
+@keyframes comboAnim {
+  0% { transform: translate(-50%, -50%) scale(0.3); opacity: 0; }
+  20% { transform: translate(-50%, -50%) scale(1.2); opacity: 1; }
+  40% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+  100% { transform: translate(-50%, -50%) scale(1); opacity: 0; }
+}
+
+.footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
+  padding: 0 4px;
+}
+
+.hint-btn {
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.15);
+  color: rgba(255,255,255,0.7);
+  padding: 8px 20px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+.hint-btn:hover {
+  background: rgba(255,255,255,0.15);
+  color: #fff;
+  transform: translateY(-1px);
+}
+
+.restart-btn {
+  background: linear-gradient(135deg, #ff4e50, #f9d423);
+  border: none;
+  color: #fff;
+  padding: 8px 24px;
+  border-radius: 12px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+.restart-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 15px rgba(255,78,80,0.4);
+}
+
+@media (max-width: 550px) {
+  .game-wrapper { padding: 16px; border-radius: 20px; }
+  canvas#board { width: calc(100vw - 70px); height: calc(100vw - 70px); }
+  .title { font-size: 20px; }
+  .stat-value { font-size: 18px; }
+  .game-wrapper { max-width: 95vw; }
+}
+</style>
+</head>
+<body>
+
+<div class="game-wrapper">
+  <div class="header">
+    <div class="title">✨ 消消乐 ✨</div>
+    <div class="stats">
+      <div class="stat-item">
+        <div class="stat-label">分数</div>
+        <div class="stat-value score" id="scoreDisplay">0</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">时间</div>
+        <div class="stat-value time" id="timeDisplay">03:00</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="board-container">
+    <canvas id="board"></canvas>
+    <div class="combo-popup" id="comboPopup"></div>
+  </div>
+
+  <div class="footer">
+    <button class="hint-btn" id="hintBtn">💡 提示</button>
+    <button class="restart-btn" id="restartBtn">🔄 重新开始</button>
+  </div>
+</div>
+
+<script>
+// ========== 消消乐 - 完整游戏 ==========
+
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+const scoreDisplay = document.getElementById('scoreDisplay');
+const timeDisplay = document.getElementById('timeDisplay');
+const comboPopup = document.getElementById('comboPopup');
+
+// --- 尺寸 ---
+const COLS = 8;
+const ROWS = 8;
+const TYPES = 6;
+const CELL_SIZE = 60;
+const GAME_DURATION = 180; // 3 分钟（秒）
+const REFILL_THRESHOLD = 20; // 空位 ≥20 时触发补充（≈ 1/3 棋盘）
+
+canvas.width = COLS * CELL_SIZE;
+canvas.height = ROWS * CELL_SIZE;
+
+// --- 宝石颜色 & 图标 ---
+const GEM_COLORS = [
+  ['#FF6B6B', '#EE5A5A'],
+  ['#4ECDC4', '#3BBDB5'],
+  ['#FFE66D', '#FFD93D'],
+  ['#A8E6CF', '#7ECBA1'],
+  ['#DDA0DD', '#C77DC7'],
+  ['#FF9FF3', '#FF7AE8'],
+];
+
+const GEM_EMOJI = ['❤️', '💎', '⭐', '🍀', '🔮', '🌸'];
+
+// --- 状态 ---
+let board = [];
+let score = 0;
+let timeLeft = GAME_DURATION; // 秒
+let timerInterval = null;
+let isProcessing = false;
+let gameEnded = false;
+let selectedCell = null;
+let hintCells = null;
+let hintTimer = null;
+
+// 消除动画状态
+let clearingCells = new Map(); // key "r,c" → { startTime, type }
+const CLEAR_ANIM_DURATION = 350; // ms
+
+// combo tracking
+let comboCount = 0;
+
+// --- 工具 ---
+function rand(max) { return Math.floor(Math.random() * max); }
+
+// --- 初始化棋盘 ---
+function createBoard() {
+  board = [];
+  for (let r = 0; r < ROWS; r++) {
+    board[r] = [];
+    for (let c = 0; c < COLS; c++) {
+      let type;
+      do {
+        type = rand(TYPES);
+      } while (
+        (r >= 2 && board[r-1][c] === type && board[r-2][c] === type) ||
+        (c >= 2 && board[r][c-1] === type && board[r][c-2] === type)
+      );
+      board[r][c] = type;
+    }
+  }
+}
+
+// --- 检测所有匹配 ---
+function findMatches() {
+  const matched = new Set();
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS - 2; c++) {
+      const t = board[r][c];
+      if (t === -1) continue;
+      if (board[r][c+1] === t && board[r][c+2] === t) {
+        let end = c + 2;
+        while (end + 1 < COLS && board[r][end+1] === t) end++;
+        for (let i = c; i <= end; i++) matched.add(r + ',' + i);
+        c = end;
+      }
+    }
+  }
+  for (let c = 0; c < COLS; c++) {
+    for (let r = 0; r < ROWS - 2; r++) {
+      const t = board[r][c];
+      if (t === -1) continue;
+      if (board[r+1][c] === t && board[r+2][c] === t) {
+        let end = r + 2;
+        while (end + 1 < ROWS && board[end+1][c] === t) end++;
+        for (let i = r; i <= end; i++) matched.add(i + ',' + c);
+        r = end;
+      }
+    }
+  }
+  return [...matched].map(k => {
+    const [r, c] = k.split(',').map(Number);
+    return { row: r, col: c };
+  });
+}
+
+// --- 移除匹配并重力下落 ---
+function removeMatches(matched) {
+  if (matched.length === 0) return;
+
+  for (const {row, col} of matched) {
+    board[row][col] = -1;
+  }
+
+  // 按列重力下落（不补充新元素，让棋盘变空）
+  for (let c = 0; c < COLS; c++) {
+    let writeRow = ROWS - 1;
+    for (let r = ROWS - 1; r >= 0; r--) {
+      if (board[r][c] !== -1) {
+        if (r !== writeRow) {
+          board[writeRow][c] = board[r][c];
+          board[r][c] = -1;
+        }
+        writeRow--;
+      }
+    }
+    // 顶部不再补充新宝石——让玩家看到消除成果
+  }
+}
+
+// --- 统计棋盘空位数 ---
+function countEmpty() {
+  let count = 0;
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      if (board[r][c] === -1) count++;
+  return count;
+}
+
+// --- 补充新元素（用动画从上方落下来） ---
+function refillBoard() {
+  for (let c = 0; c < COLS; c++) {
+    for (let r = 0; r < ROWS; r++) {
+      if (board[r][c] === -1) {
+        board[r][c] = rand(TYPES);
+      }
+    }
+  }
+}
+
+// --- 检测是否还有可交换 ---
+function hasValidMoves() {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (c + 1 < COLS) {
+        [board[r][c], board[r][c+1]] = [board[r][c+1], board[r][c]];
+        if (findMatches().length > 0) {
+          [board[r][c], board[r][c+1]] = [board[r][c+1], board[r][c]];
+          return true;
+        }
+        [board[r][c], board[r][c+1]] = [board[r][c+1], board[r][c]];
+      }
+      if (r + 1 < ROWS) {
+        [board[r][c], board[r+1][c]] = [board[r+1][c], board[r][c]];
+        if (findMatches().length > 0) {
+          [board[r][c], board[r+1][c]] = [board[r+1][c], board[r][c]];
+          return true;
+        }
+        [board[r][c], board[r+1][c]] = [board[r+1][c], board[r][c]];
+      }
+    }
+  }
+  return false;
+}
+
+// --- 找一对提示 ---
+function findHint() {
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      if (c + 1 < COLS) {
+        [board[r][c], board[r][c+1]] = [board[r][c+1], board[r][c]];
+        if (findMatches().length > 0) {
+          [board[r][c], board[r][c+1]] = [board[r][c+1], board[r][c]];
+          return [{row:r, col:c}, {row:r, col:c+1}];
+        }
+        [board[r][c], board[r][c+1]] = [board[r][c+1], board[r][c]];
+      }
+      if (r + 1 < ROWS) {
+        [board[r][c], board[r+1][c]] = [board[r+1][c], board[r][c]];
+        if (findMatches().length > 0) {
+          [board[r][c], board[r+1][c]] = [board[r+1][c], board[r][c]];
+          return [{row:r, col:c}, {row:r+1, col:c}];
+        }
+        [board[r][c], board[r+1][c]] = [board[r+1][c], board[r][c]];
+      }
+    }
+  }
+  return null;
+}
+
+function ensurePlayable() {
+  if (!hasValidMoves()) {
+    createBoard();
+    ensurePlayable();
+  }
+}
+
+// ========== 计时器 ==========
+
+function startTimer() {
+  stopTimer();
+  timerInterval = setInterval(() => {
+    if (isProcessing && comboCount > 0) return; // 连锁消除时时间照走但不动 UI
+    timeLeft--;
+    updateUI();
+    if (timeLeft <= 0) {
+      timeLeft = 0;
+      updateUI();
+      gameEnded = true;
+      stopTimer();
+      isProcessing = false;
+      gameOver();
+    }
+  }, 1000);
+}
+
+function stopTimer() {
+  if (timerInterval) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+  }
+}
+
+// ========== 交换 & 消除主流程 ==========
+
+function trySwap(r1, c1, r2, c2) {
+  if (isProcessing) return;
+  if (gameEnded) return;
+  if (timeLeft <= 0) return;
+
+  [board[r1][c1], board[r2][c2]] = [board[r2][c2], board[r1][c1]];
+  const matched = findMatches();
+  if (matched.length === 0) {
+    [board[r1][c1], board[r2][c2]] = [board[r2][c2], board[r1][c1]];
+    shakeCell(r2, c2);
+    return;
+  }
+
+  isProcessing = true;
+  comboCount = 0;
+  selectedCell = null;
+  clearHint();
+
+  processWithClearAnim(matched);
+}
+
+function processWithClearAnim(matched) {
+  comboCount++;
+
+  // 计分
+  const base = matched.length >= 4 ? 15 : 10;
+  const extra = (matched.length - 3) * 5;
+  const comboBonus = comboCount > 1 ? Math.floor(comboCount * 5) : 0;
+  const points = base + extra + comboBonus;
+  score += points;
+  updateUI();
+
+  // combo 弹窗
+  if (comboCount >= 2) {
+    showCombo(comboCount);
+  }
+
+  // 启动消除动画：记录消除中的格子
+  const now = Date.now();
+  for (const {row, col} of matched) {
+    const type = board[row][col];
+    if (type !== -1) {
+      clearingCells.set(row + ',' + col, { startTime: now, type });
+    }
+  }
+
+  // 动画结束后执行实际移除
+  setTimeout(() => {
+    // 实际移除
+    removeMatches(matched);
+    clearingCells.clear();
+
+    // 检查新匹配（链式）
+    const newMatched = findMatches();
+    if (newMatched.length > 0) {
+      processWithClearAnim(newMatched);
+    } else {
+      // 检查空位是否达到补充阈值
+      const empty = countEmpty();
+      if (empty >= REFILL_THRESHOLD) {
+        showCombo('📦 补充!');
+        setTimeout(() => {
+          refillBoard();
+          // 补充后检查新匹配
+          const newMatched = findMatches();
+          if (newMatched.length > 0) {
+            processWithClearAnim(newMatched);
+          } else {
+            isProcessing = false;
+          }
+        }, 400);
+        return;
+      }
+      // 检查是否有可玩
+      if (!hasValidMoves()) {
+        showCombo('💫 洗牌');
+        setTimeout(() => { shuffleBoard(); }, 500);
+        return;
+      }
+      isProcessing = false;
+    }
+  }, CLEAR_ANIM_DURATION);
+}
+
+// --- 洗牌 ---
+function shuffleBoard() {
+  // 先把空位补齐，否则太稀疏无法形成匹配
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      if (board[r][c] === -1) board[r][c] = rand(TYPES);
+
+  const allTypes = [];
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      allTypes.push(board[r][c]);
+
+  for (let i = allTypes.length - 1; i > 0; i--) {
+    const j = rand(i + 1);
+    [allTypes[i], allTypes[j]] = [allTypes[j], allTypes[i]];
+  }
+
+  let idx = 0;
+  for (let r = 0; r < ROWS; r++)
+    for (let c = 0; c < COLS; c++)
+      board[r][c] = allTypes[idx++];
+
+  const matched = findMatches();
+  if (matched.length > 0) {
+    setTimeout(() => processWithClearAnim(matched), 300);
+  } else {
+    ensurePlayable();
+    isProcessing = false;
+  }
+}
+
+// --- 游戏结束 ---
+function gameOver() {
+  showCombo('⏰ 时间到!');
+  setTimeout(() => {
+    if (confirm(`⏰ 时间到！\n最终得分：${score}\n\n再来一局？`)) {
+      initGame();
+    }
+  }, 800);
+}
+
+// ========== 渲染 ==========
+
+let shakingCell = null;
+
+function shakeCell(row, col) {
+  shakingCell = { row, col, time: Date.now() };
+}
+
+function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  const now = Date.now();
+
+  // 网格背景
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const x = c * CELL_SIZE, y = r * CELL_SIZE;
+      ctx.fillStyle = (r + c) % 2 === 0 ? 'rgba(255,255,255,0.04)' : 'rgba(255,255,255,0.08)';
+      ctx.fillRect(x, y, CELL_SIZE, CELL_SIZE);
+    }
+  }
+
+  // 提示高亮
+  if (hintCells) {
+    const pulse = Math.sin(now * 0.005) * 0.3 + 0.5;
+    for (const {row, col} of hintCells) {
+      const x = col * CELL_SIZE, y = row * CELL_SIZE;
+      ctx.strokeStyle = `rgba(255,215,0,${pulse})`;
+      ctx.lineWidth = 3;
+      ctx.setLineDash([5, 5]);
+      ctx.strokeRect(x + 2, y + 2, CELL_SIZE - 4, CELL_SIZE - 4);
+      ctx.setLineDash([]);
+    }
+  }
+
+  // 选中高亮
+  if (selectedCell) {
+    const {row, col} = selectedCell;
+    const x = col * CELL_SIZE, y = row * CELL_SIZE;
+    ctx.shadowColor = 'rgba(255,255,255,0.3)';
+    ctx.shadowBlur = 15;
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(x + 2, y + 2, CELL_SIZE - 4, CELL_SIZE - 4);
+    ctx.shadowBlur = 0;
+  }
+
+  // 震动
+  let shakeOffset = 0;
+  if (shakingCell && now - shakingCell.time < 300) {
+    shakeOffset = Math.sin((now - shakingCell.time) * 0.3) * 4;
+    if (now - shakingCell.time > 300) shakingCell = null;
+  }
+
+  // 画宝石
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS; c++) {
+      const type = board[r][c];
+      if (type === -1) continue;
+
+      const key = r + ',' + c;
+      const x = c * CELL_SIZE, y = r * CELL_SIZE;
+      const cx = x + CELL_SIZE/2, cy = y + CELL_SIZE/2;
+
+      // 检查是否在消除动画中
+      const clearing = clearingCells.get(key);
+      let scale = 1, alpha = 1;
+      if (clearing) {
+        const elapsed = now - clearing.startTime;
+        const progress = Math.min(elapsed / CLEAR_ANIM_DURATION, 1);
+        // easeOutQuad: 先加速后减速消失
+        const eased = 1 - (1 - progress) * (1 - progress);
+        scale = 1 - eased * 0.8;
+        alpha = 1 - eased;
+        if (alpha <= 0) continue; // 完全消失就不画了
+      }
+
+      const sz = 22 * scale;
+      const isShaking = shakingCell && shakingCell.row === r && shakingCell.col === c;
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+
+      if (isShaking) {
+        ctx.translate(shakeOffset, 0);
+      }
+
+      // 宝石主体
+      const grad = ctx.createRadialGradient(cx-4*scale, cy-4*scale, 2*scale, cx, cy, sz);
+      grad.addColorStop(0, GEM_COLORS[type][0]);
+      grad.addColorStop(1, GEM_COLORS[type][1]);
+      ctx.shadowColor = GEM_COLORS[type][0];
+      ctx.shadowBlur = 10 * scale;
+      ctx.beginPath();
+      ctx.arc(cx, cy, sz, 0, Math.PI * 2);
+      ctx.fillStyle = grad;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      // 高光
+      ctx.beginPath();
+      ctx.arc(cx-6*scale, cy-6*scale, 7*scale, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.3)';
+      ctx.fill();
+
+      // 图标
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.font = `${20 * scale}px "Segoe UI", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(GEM_EMOJI[type], cx, cy + 1);
+
+      ctx.restore();
+    }
+  }
+
+  requestAnimationFrame(render);
+}
+
+// ========== UI 更新 ==========
+
+function updateUI() {
+  scoreDisplay.textContent = score;
+  const mins = Math.floor(timeLeft / 60);
+  const secs = timeLeft % 60;
+  timeDisplay.textContent = String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+  timeDisplay.classList.toggle('warning', timeLeft <= 30);
+}
+
+function showCombo(text) {
+  comboPopup.textContent = typeof text === 'number'
+    ? `🔥 ${text}连击! +${Math.floor(text * 5)}`
+    : text;
+  comboPopup.className = 'combo-popup';
+  void comboPopup.offsetWidth;
+  comboPopup.className = 'combo-popup show';
+}
+
+function clearHint() {
+  if (hintTimer) { clearTimeout(hintTimer); hintTimer = null; }
+  hintCells = null;
+}
+
+function showHint() {
+  clearHint();
+  const h = findHint();
+  if (h) {
+    hintCells = h;
+    hintTimer = setTimeout(() => { hintCells = null; }, 2000);
+  }
+}
+
+// ========== 输入处理 ==========
+
+function getGridPos(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / rect.width;
+  const scaleY = canvas.height / rect.height;
+  let clientX, clientY;
+  if (e.touches) {
+    clientX = e.touches[0].clientX;
+    clientY = e.touches[0].clientY;
+    e.preventDefault();
+  } else {
+    clientX = e.clientX;
+    clientY = e.clientY;
+  }
+  const x = (clientX - rect.left) * scaleX;
+  const y = (clientY - rect.top) * scaleY;
+  const col = Math.floor(x / CELL_SIZE);
+  const row = Math.floor(y / CELL_SIZE);
+  if (row < 0 || row >= ROWS || col < 0 || col >= COLS) return null;
+  return { row, col };
+}
+
+function handleClick(e) {
+  if (isProcessing) return;
+  if (gameEnded) return;
+  if (timeLeft <= 0) return;
+
+  const pos = getGridPos(e);
+  if (!pos) return;
+
+  const { row, col } = pos;
+
+  if (!selectedCell) {
+    selectedCell = { row, col };
+    return;
+  }
+
+  if (selectedCell.row === row && selectedCell.col === col) {
+    selectedCell = null;
+    return;
+  }
+
+  const dr = Math.abs(selectedCell.row - row);
+  const dc = Math.abs(selectedCell.col - col);
+  if ((dr === 1 && dc === 0) || (dr === 0 && dc === 1)) {
+    trySwap(selectedCell.row, selectedCell.col, row, col);
+    selectedCell = null;
+  } else {
+    selectedCell = { row, col };
+  }
+}
+
+canvas.addEventListener('click', handleClick);
+canvas.addEventListener('touchstart', handleClick, { passive: false });
+
+// ========== 初始化 ==========
+
+function initGame() {
+  score = 0;
+  timeLeft = GAME_DURATION;
+  gameEnded = false;
+  selectedCell = null;
+  isProcessing = false;
+  comboCount = 0;
+  clearingCells.clear();
+  clearHint();
+  createBoard();
+  ensurePlayable();
+  updateUI();
+  comboPopup.className = 'combo-popup';
+  startTimer();
+}
+
+// 背景粒子
+function createBgParticles() {
+  for (let i = 0; i < 25; i++) {
+    const el = document.createElement('div');
+    el.className = 'bg-particle';
+    const size = rand(20) + 6;
+    el.style.width = size + 'px';
+    el.style.height = size + 'px';
+    el.style.left = rand(100) + '%';
+    el.style.background = ['#FF6B6B','#4ECDC4','#FFE66D','#DDA0DD','#FF9FF3','#A8E6CF'][rand(6)];
+    el.style.animationDuration = (rand(15) + 12) + 's';
+    el.style.animationDelay = (rand(20)) + 's';
+    document.body.appendChild(el);
+  }
+}
+
+// --- 启动 ---
+createBgParticles();
+initGame();
+render();
+
+// 重开
+document.getElementById('restartBtn').addEventListener('click', () => {
+  stopTimer();
+  if (confirm('确定要重新开始吗？')) initGame();
+  else startTimer();
+});
+
+// 提示
+document.getElementById('hintBtn').addEventListener('click', showHint);
+
+</script>
+</body>
+</html>
