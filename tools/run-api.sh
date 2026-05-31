@@ -1,5 +1,6 @@
 #!/bin/bash
 set -ex
+cd "$(dirname "$0")"
 
 # python api-deepseek-v4.py \
 #   --input data/input.jsonl \

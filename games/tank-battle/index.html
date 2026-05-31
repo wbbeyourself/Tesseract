@@ -1,0 +1,2677 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>坦克大战 - Battle City</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #111;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  overflow: hidden;
+  font-family: monospace;
+}
+#gameContainer {
+  position: relative;
+  display: flex;
+}
+#gameCanvas {
+  border: 2px solid #555;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+#leftPanel, #rightPanel {
+  width: 120px;
+  background: #1a1a1a;
+  border: 2px solid #555;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+</style>
+</head>
+<body>
+<div id="gameContainer">
+  <div id="leftPanel"></div>
+  <canvas id="gameCanvas"></canvas>
+  <div id="rightPanel"></div>
+</div>
+<div id="controlsHint" style="text-align:center;margin-top:4px;"></div>
+
+<script src="data/maps.js"></script>
+<script>
+"use strict";
+
+// ===== CONSTANTS =====
+const C = {
+  // Grid
+  COLS: 26,
+  ROWS: 26,
+  TILE: 32,          // base tile size in pixels (HD)
+  SCALE: 1,          // no CSS scaling needed at 32px tiles
+  STAGE_W: 26 * 32,  // 832 pixels
+  STAGE_H: 26 * 32,
+
+  // Directions
+  UP: 0, RIGHT: 1, DOWN: 2, LEFT: 3,
+  DX: [0, 1, 0, -1],
+  DY: [-1, 0, 1, 0],
+
+  // Game
+  FPS: 60,
+  TANK_SIZE: 32,
+  BOSS_SIZE: 64,
+  BULLET_SIZE: 8,
+  POWERUP_SIZE: 32,
+
+  // Terrain codes
+  T_EMPTY: 0, T_BRICK: 1, T_STEEL: 2, T_WATER: 3,
+  T_TREE: 4, T_ICE: 5, T_BASE: 9,
+
+  // Player (speeds doubled for 32px tiles)
+  P_SPEED: [0, 4.5, 5.2, 5.8, 6.5],  // speed per level (index 0 unused)
+  P_BULLET_SPEED: [0, 10.0, 12.0, 12.0, 14.0],
+  P_MAX_BULLETS: [0, 3, 3, 4, 4],
+  P_INIT_LIVES: 8,
+
+  // Enemy types: [name, color, hp, speed, bulletSpeed, aiLevel] (speeds doubled for 32px tiles)
+  E_TYPES: {
+    basic:   { name: 'basic',   color: '#888', hp: 1, speed: 1.6, bulletSpeed: 4.0, minStage: 1 },
+    fast:    { name: 'fast',    color: '#ddd', hp: 1, speed: 3.6, bulletSpeed: 5.0, minStage: 3 },
+    power:   { name: 'power',   color: '#4a4', hp: 2, speed: 2.0, bulletSpeed: 6.0, minStage: 5 },
+    armor:   { name: 'armor',   color: '#da3', hp: 4, speed: 1.4, bulletSpeed: 4.0, minStage: 8 },
+    elite:   { name: 'elite',   color: '#d44', hp: 3, speed: 2.4, bulletSpeed: 5.0, minStage: 12 },
+  },
+
+  // Power-up types
+  PU_STAR: 0, PU_BOMB: 1, PU_SHOVEL: 2, PU_HELMET: 3,
+  PU_CLOCK: 4, PU_TANK: 5, PU_SPREAD: 6, PU_MISSILE: 7,
+  PU_SPEED: 8, PU_SHIELD: 9,
+  PU_DURATION: 10000, // ms, power-up stays on field
+  PU_NAMES: ['star','bomb','shovel','helmet','clock','tank','spread','missile','speed','shield'],
+
+  // Colors
+  COL_BG: '#000',
+  COL_BRICK: '#8B4513',
+  COL_STEEL: '#C0C0C0',
+  COL_WATER: '#4488CC',
+  COL_TREE: '#228B22',
+  COL_ICE: '#ADD8E6',
+  COL_BASE_OK: '#FFD700',
+  COL_BASE_DEAD: '#555',
+  COL_PLAYER: '#FFD700',
+  COL_TEXT: '#FFF',
+  COL_HUD_BG: '#1a1a1a',
+};
+
+// ===== UTILS =====
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function randInt(lo, hi) { return lo + Math.floor(Math.random() * (hi - lo + 1)); }
+function randFloat(lo, hi) { return lo + Math.random() * (hi - lo); }
+function rectOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+function tileToPixel(t) { return t * C.TILE; }
+function pixelToTile(p) { return Math.floor(p / C.TILE); }
+function speak(text) {
+  const map = {
+    'great': 'sounds/kill.mp3',
+    'oh oh': 'sounds/death.mp3',
+    'stageClear': 'sounds/过关.mp3',
+    'baseDestroyed': 'sounds/偷家.mp3',
+  };
+  const url = map[text] || 'sounds/death.mp3';
+  const a = new window.Audio(url);
+  a.volume = 0.8;
+  a.play().catch(() => {});
+}
+
+// ===== SPRITES =====
+const Sprites = {
+  atlas: {},  // key: 'player_0_0' (entity_direction_frame) → offscreen canvas
+
+  // Define a sprite from a 2D array of hex colors ('.' = transparent)
+  // If pscale > 1, each pixel in the array is drawn as a pscale x pscale block
+  define(key, pixels, size, pscale) {
+    pscale = pscale || 1;
+    size = size || C.TILE;
+    const c = document.createElement('canvas');
+    c.width = size; c.height = size;
+    const ctx = c.getContext('2d');
+    for (let y = 0; y < pixels.length; y++) {
+      for (let x = 0; x < pixels[y].length; x++) {
+        if (pixels[y][x] !== '.') {
+          ctx.fillStyle = pixels[y][x];
+          ctx.fillRect(x * pscale, y * pscale, pscale, pscale);
+        }
+      }
+    }
+    this.atlas[key] = c;
+  },
+
+  draw(ctx, key, x, y) {
+    const sprite = this.atlas[key];
+    if (sprite) ctx.drawImage(sprite, Math.round(x), Math.round(y));
+  },
+
+  init() {
+    this._buildTerrain();
+    this._buildPlayerTanks();
+    this._buildEnemyTanks();
+    this._buildBullets();
+    this._buildPowerUps();
+    this._buildExplosions();
+    this._buildBase();
+    this._buildMisc();
+  },
+
+  // --- TERRAIN SPRITES (16x16 arrays, drawn at 2x scale = 32x32) ---
+  _buildTerrain() {
+    const B = '#8B4513'; // brick
+    const BD = '#6B3410';
+    const S = '#C0C0C0'; // steel
+    const SD = '#888';
+    const W = '#4488CC'; // water
+    const WL = '#66AAEE';
+    const T = '#228B22'; // tree
+    const TD = '#1A6B1A';
+    const I = '#ADD8E6'; // ice
+    const IL = '#C8E8F8';
+
+    // Brick wall - 4 sub-blocks pattern
+    const brick = [
+      [B,B,B,B,B,B,B,'.',B,B,B,B,B,B,B,'.'],
+      [B,BD,BD,BD,B,B,B,'.',B,BD,BD,BD,B,B,B,'.'],
+      [B,BD,BD,BD,B,B,B,'.',B,BD,BD,BD,B,B,B,'.'],
+      [B,B,B,B,B,B,B,'.',B,B,B,B,B,B,B,'.'],
+      ['.',B,B,B,B,B,B,'.','.',B,B,B,B,B,B,'.'],
+      ['.',B,BD,BD,BD,B,B,'.','.',B,BD,BD,BD,B,B,'.'],
+      ['.',B,BD,BD,BD,B,B,'.','.',B,BD,BD,BD,B,B,'.'],
+      ['.',B,B,B,B,B,B,'.','.',B,B,B,B,B,B,'.'],
+      [B,B,B,B,B,B,B,'.',B,B,B,B,B,B,B,'.'],
+      [B,BD,BD,BD,B,B,B,'.',B,BD,BD,BD,B,B,B,'.'],
+      [B,BD,BD,BD,B,B,B,'.',B,BD,BD,BD,B,B,B,'.'],
+      [B,B,B,B,B,B,B,'.',B,B,B,B,B,B,B,'.'],
+      ['.',B,B,B,B,B,B,'.','.',B,B,B,B,B,B,'.'],
+      ['.',B,BD,BD,BD,B,B,'.','.',B,BD,BD,BD,B,B,'.'],
+      ['.',B,BD,BD,BD,B,B,'.','.',B,BD,BD,BD,B,B,'.'],
+      ['.',B,B,B,B,B,B,'.','.',B,B,B,B,B,B,'.'],
+    ];
+    this.define('terrain_brick', brick, C.TILE, 2);
+
+    // Steel wall
+    const steel = [
+      [S,S,S,S,S,S,S,S,S,S,S,S,S,S,S,S],
+      [S,SD,S,S,S,S,S,S,S,S,S,S,S,S,SD,S],
+      [S,S,S,S,S,SD,S,S,S,S,SD,S,S,S,S,S],
+      [S,S,S,S,S,S,S,S,S,S,S,S,S,S,S,S],
+      [S,S,S,SD,S,S,S,S,S,S,S,S,SD,S,S,S],
+      [S,S,S,S,S,S,S,S,S,S,S,S,S,S,S,S],
+      [S,S,S,S,S,S,S,SD,S,S,S,S,S,S,S,S],
+      [S,S,S,S,S,S,S,S,S,S,S,S,S,S,S,S],
+      [S,SD,S,S,S,S,S,S,S,S,S,S,S,S,SD,S],
+      [S,S,S,S,S,SD,S,S,S,S,SD,S,S,S,S,S],
+      [S,S,S,S,S,S,S,S,S,S,S,S,S,S,S,S],
+      [S,S,S,SD,S,S,S,S,S,S,S,S,SD,S,S,S],
+      [S,S,S,S,S,S,S,S,S,S,S,S,S,S,S,S],
+      [S,S,S,S,S,S,S,SD,S,S,S,S,S,S,S,S],
+      [S,S,S,S,S,S,S,S,S,S,S,S,S,S,S,S],
+      [S,S,S,S,S,S,S,S,S,S,S,S,S,S,S,S],
+    ];
+    this.define('terrain_steel', steel, C.TILE, 2);
+
+    // Water
+    const water = [
+      [W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W],
+      [W,WL,W,W,W,WL,W,W,W,WL,W,W,W,WL,W,W],
+      [W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W],
+      [WL,W,W,W,WL,W,W,W,WL,W,W,W,WL,W,W,W],
+      [W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W],
+      [W,WL,W,W,W,WL,W,W,W,WL,W,W,W,WL,W,W],
+      [W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W],
+      [WL,W,W,W,WL,W,W,W,WL,W,W,W,WL,W,W,W],
+      [W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W],
+      [W,WL,W,W,W,WL,W,W,W,WL,W,W,W,WL,W,W],
+      [W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W],
+      [WL,W,W,W,WL,W,W,W,WL,W,W,W,WL,W,W,W],
+      [W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W],
+      [W,WL,W,W,W,WL,W,W,W,WL,W,W,W,WL,W,W],
+      [W,W,W,W,W,W,W,W,W,W,W,W,W,W,W,W],
+      [WL,W,W,W,WL,W,W,W,WL,W,W,W,WL,W,W,W],
+    ];
+    this.define('terrain_water', water, C.TILE, 2);
+
+    // Tree
+    const tree = [
+      ['.',T,T,'.','.',T,T,'.','.','.',T,T,'.','.',T,T,'.'],
+      [T,T,T,T,T,T,T,T,T,T,T,T,T,T,T,T],
+      [T,TD,T,TD,T,T,TD,T,T,TD,T,T,TD,T,T,TD,T],
+      [T,T,T,T,T,T,T,T,T,T,T,T,T,T,T,T],
+      [T,T,TD,T,T,T,T,TD,T,T,T,TD,T,T,T,T,T],
+      ['.',T,T,T,T,T,T,T,T,T,T,T,T,T,T,'.'],
+      ['.',T,TD,T,T,TD,T,T,T,T,TD,T,T,TD,T,'.','.'],
+      ['.','.',T,T,T,T,T,T,T,T,T,T,T,T,'.','.','.'],
+      ['.',T,T,'.','.',T,T,'.','.','.',T,T,'.','.',T,T,'.'],
+      [T,T,T,T,T,T,T,T,T,T,T,T,T,T,T,T],
+      [T,TD,T,TD,T,T,TD,T,T,TD,T,T,TD,T,T,TD,T],
+      [T,T,T,T,T,T,T,T,T,T,T,T,T,T,T,T],
+      [T,T,TD,T,T,T,T,TD,T,T,T,TD,T,T,T,T,T],
+      ['.',T,T,T,T,T,T,T,T,T,T,T,T,T,T,'.'],
+      ['.',T,TD,T,T,TD,T,T,T,T,TD,T,T,TD,T,'.','.'],
+      ['.','.',T,T,T,T,T,T,T,T,T,T,T,T,'.','.','.'],
+    ];
+    this.define('terrain_tree', tree, C.TILE, 2);
+
+    // Ice
+    const ice = [
+      [I,I,I,I,I,I,I,I,I,I,I,I,I,I,I,I],
+      [I,IL,I,I,IL,I,I,I,I,IL,I,I,IL,I,I,I],
+      [I,I,I,I,I,I,I,I,I,I,I,I,I,I,I,I],
+      [I,IL,I,I,I,I,IL,I,I,I,I,IL,I,I,I,I],
+      [I,I,I,I,I,I,I,I,I,I,I,I,I,I,I,I],
+      [I,I,IL,I,I,I,I,I,I,I,I,I,I,IL,I,I],
+      [I,I,I,I,I,I,I,I,I,I,I,I,I,I,I,I],
+      [I,IL,I,I,IL,I,I,I,I,IL,I,I,IL,I,I,I],
+      [I,I,I,I,I,I,I,I,I,I,I,I,I,I,I,I],
+      [I,IL,I,I,I,I,IL,I,I,I,I,IL,I,I,I,I],
+      [I,I,I,I,I,I,I,I,I,I,I,I,I,I,I,I],
+      [I,I,IL,I,I,I,I,I,I,I,I,I,I,IL,I,I],
+      [I,I,I,I,I,I,I,I,I,I,I,I,I,I,I,I],
+      [I,IL,I,I,IL,I,I,I,I,IL,I,I,IL,I,I,I],
+      [I,I,I,I,I,I,I,I,I,I,I,I,I,I,I,I],
+      [I,IL,I,I,I,I,IL,I,I,I,I,IL,I,I,I,I],
+    ];
+    this.define('terrain_ice', ice, C.TILE, 2);
+  },
+
+  // --- PLAYER TANK SPRITES (32x32) ---
+  _buildPlayerTanks() {
+    // Player tanks: 4 levels × 4 directions × 2 animation frames
+    // Bright, distinctive colors that contrast with all enemies
+    const levelColors = ['#00E5FF', '#4488FF', '#AA44FF', '#FF44AA'];
+    const DK = ['#009DB8', '#2266CC', '#7722CC', '#CC2288'];
+
+    for (let lv = 0; lv < 4; lv++) {
+      const c = levelColors[lv];
+      const d = DK[lv];
+      for (let dir = 0; dir < 4; dir++) {
+        for (let frame = 0; frame < 2; frame++) {
+          const pixels = this._makeTankPixels(c, d, dir, frame);
+          this.define(`player_${lv}_${dir}_${frame}`, pixels);
+        }
+      }
+    }
+  },
+
+  _makeTankPixels(mainC, darkC, dir, frame) {
+    // Create a 32x32 tank sprite
+    const px = Array.from({length:32}, () => Array(32).fill('.'));
+    const M = mainC, D = darkC, G = '#FFF'; // gun barrel — bright white for visibility
+
+    // Treads (columns 0-3 and 28-31, 4px wide)
+    const treadPat = frame === 0
+      ? [D,D,D,'.',D,D,D,'.',D,D,D,'.',D,D,D,'.',D,D,D,'.',D,D,D,'.',D,D,D,'.',D,D,D,'.',D]
+      : ['.',D,D,D,'.',D,D,D,'.',D,D,D,'.',D,D,D,'.',D,D,D,'.',D,D,D,'.',D,D,D,'.',D,D,D];
+    for (let y = 0; y < 32; y++) {
+      px[y][0] = D; px[y][1] = D; px[y][2] = treadPat[y]; px[y][3] = treadPat[y];
+      px[y][28] = treadPat[y]; px[y][29] = treadPat[y]; px[y][30] = D; px[y][31] = D;
+    }
+    // Body (columns 4-27)
+    for (let y = 4; y < 28; y++) {
+      for (let x = 4; x < 28; x++) {
+        px[y][x] = M;
+      }
+    }
+    // Turret center detail (12x12 area)
+    for (let y = 10; y < 22; y++) {
+      for (let x = 10; x < 22; x++) {
+        px[y][x] = D;
+      }
+    }
+    // Gun barrel (6px wide, extends further for clear direction)
+    if (dir === C.UP) {
+      for (let y = 0; y < 12; y++) { px[y][13] = G; px[y][14] = G; px[y][15] = G; px[y][16] = G; px[y][17] = G; px[y][18] = G; }
+    } else if (dir === C.DOWN) {
+      for (let y = 20; y < 32; y++) { px[y][13] = G; px[y][14] = G; px[y][15] = G; px[y][16] = G; px[y][17] = G; px[y][18] = G; }
+    } else if (dir === C.LEFT) {
+      for (let x = 0; x < 12; x++) { px[13][x] = G; px[14][x] = G; px[15][x] = G; px[16][x] = G; px[17][x] = G; px[18][x] = G; }
+    } else {
+      for (let x = 20; x < 32; x++) { px[13][x] = G; px[14][x] = G; px[15][x] = G; px[16][x] = G; px[17][x] = G; px[18][x] = G; }
+    }
+    return px;
+  },
+
+  // --- ENEMY TANK SPRITES (32x32) ---
+  _buildEnemyTanks() {
+    const types = {
+      basic:  { m: '#888', d: '#555' },
+      fast:   { m: '#DDD', d: '#E0E0E0' },
+      power:  { m: '#4A4', d: '#282' },
+      armor:  { m: '#DA3', d: '#A72' },
+      elite:  { m: '#D44', d: '#A22' },
+    };
+    for (const [name, col] of Object.entries(types)) {
+      for (let dir = 0; dir < 4; dir++) {
+        for (let frame = 0; frame < 2; frame++) {
+          const pixels = this._makeTankPixels(col.m, col.d, dir, frame);
+          this.define(`enemy_${name}_${dir}_${frame}`, pixels);
+        }
+      }
+    }
+    // Boss: 64x64 sprite
+    for (let dir = 0; dir < 4; dir++) {
+      for (let frame = 0; frame < 2; frame++) {
+        const pixels = this._makeBossPixels('#D00', '#900', dir, frame);
+        this.define(`boss_${dir}_${frame}`, pixels, C.BOSS_SIZE);
+      }
+    }
+  },
+
+  _makeBossPixels(mainC, darkC, dir, frame) {
+    const sz = C.BOSS_SIZE; // 64
+    const px = Array.from({length:sz}, () => Array(sz).fill('.'));
+    const M = mainC, D = darkC, G = '#DDD';
+    const treadPat = frame === 0
+      ? [D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D]
+      : ['.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.',D,D,D,D,'.'];
+    for (let y = 0; y < sz; y++) {
+      for (let x = 0; x < 6; x++) { px[y][x] = x < 2 ? D : treadPat[y]; }
+      for (let x = sz-6; x < sz; x++) { px[y][x] = x >= sz-2 ? D : treadPat[y]; }
+    }
+    for (let y = 8; y < sz-8; y++) {
+      for (let x = 8; x < sz-8; x++) { px[y][x] = M; }
+    }
+    for (let y = 16; y < sz-16; y++) {
+      for (let x = 16; x < sz-16; x++) { px[y][x] = D; }
+    }
+    // Gun barrel (8px wide)
+    if (dir === C.UP) { for (let y = 2; y < 20; y++) { for (let x = 28; x < 36; x++) if(x<sz) px[y][x]=G; } }
+    else if (dir === C.DOWN) { for (let y = sz-20; y < sz-2; y++) { for (let x = 28; x < 36; x++) if(x<sz) px[y][x]=G; } }
+    else if (dir === C.LEFT) { for (let x = 2; x < 20; x++) { for (let y = 28; y < 36; y++) if(y<sz) px[y][x]=G; } }
+    else { for (let x = sz-20; x < sz-2; x++) { for (let y = 28; y < 36; y++) if(y<sz) px[y][x]=G; } }
+    return px;
+  },
+
+  // --- BULLET SPRITES (8x8) ---
+  _buildBullets() {
+    const BC = '#FFF';
+    for (let dir = 0; dir < 4; dir++) {
+      const px = Array.from({length:8}, () => Array(8).fill('.'));
+      // Centered 4x4 bright square with slightly larger core
+      for (let y = 2; y < 6; y++) {
+        for (let x = 2; x < 6; x++) {
+          px[y][x] = BC;
+        }
+      }
+      this.define(`bullet_${dir}`, px, C.BULLET_SIZE);
+    }
+  },
+
+  // --- POWER-UP SPRITES (32x32) ---
+  _buildPowerUps() {
+    const puColors = ['#FFD700','#FF4400','#AABBCC','#FFD700',
+                      '#44AAFF','#FF4466','#FF8844','#FF0000',
+                      '#44FF44','#8888FF'];
+    for (let i = 0; i < 10; i++) {
+      const px = Array.from({length:16}, () => Array(16).fill('#8B0000'));
+      const col = puColors[i];
+      // Draw a simple icon shape in the center
+      for (let y = 4; y < 12; y++) {
+        for (let x = 4; x < 12; x++) {
+          px[y][x] = col;
+        }
+      }
+      // Border
+      for (let y = 0; y < 16; y++) { px[y][0] = '#555'; px[y][15] = '#555'; }
+      for (let x = 0; x < 16; x++) { px[0][x] = '#555'; px[15][x] = '#555'; }
+      this.define(`powerup_${i}`, px, C.POWERUP_SIZE, 2);
+    }
+  },
+
+  // --- EXPLOSION SPRITES (scaled for 32px tiles) ---
+  _buildExplosions() {
+    const frames = 5;
+    for (let f = 0; f < frames; f++) {
+      const size = 32 + f * 8;
+      const px = Array.from({length:size}, () => Array(size).fill('.'));
+      const cx = Math.floor(size / 2);
+      const radius = 4 + f * 4;
+      const colors = ['#FF4400', '#FF8800', '#FFCC00', '#FFFFFF'];
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          const dist = Math.abs(x - cx) + Math.abs(y - cx);
+          if (dist <= radius) {
+            const ci = Math.min(Math.floor(dist / Math.max(1, radius / 4)), 3);
+            px[y][x] = colors[ci];
+          }
+        }
+      }
+      this.define(`explosion_${f}`, px, size);
+    }
+  },
+
+  // --- BASE SPRITE (16x16 array drawn at 2x = 32x32) ---
+  _buildBase() {
+    const G = C.COL_BASE_OK;
+    const eagle = [
+      [0,0,0,0,0,0,1,1,1,1,0,0,0,0,0,0],
+      [0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0],
+      [0,0,0,0,1,1,0,1,1,0,1,1,0,0,0,0],
+      [0,0,0,0,1,1,0,1,1,0,1,1,0,0,0,0],
+      [0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0],
+      [0,0,0,0,0,0,1,0,0,1,0,0,0,0,0,0],
+      [0,0,0,0,0,1,1,0,0,1,1,0,0,0,0,0],
+      [0,0,0,0,1,1,1,0,0,1,1,1,0,0,0,0],
+      [0,0,0,1,1,1,1,0,0,1,1,1,1,0,0,0],
+      [0,0,1,1,1,1,1,0,0,1,1,1,1,1,0,0],
+      [0,1,1,1,1,1,0,0,0,0,1,1,1,1,1,0],
+      [0,1,1,1,1,0,0,0,0,0,0,1,1,1,1,0],
+      [0,0,1,1,1,0,0,0,0,0,0,1,1,1,0,0],
+      [0,0,0,1,1,0,0,0,0,0,0,1,1,0,0,0],
+      [0,0,0,0,1,1,0,0,0,0,1,1,0,0,0,0],
+      [0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0],
+    ];
+    // Base OK
+    const px = Array.from({length:16}, () => Array(16).fill('.'));
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < 16; x++) {
+        if (eagle[y][x]) px[y][x] = G;
+      }
+    }
+    this.define('base_ok', px, C.TILE, 2);
+    // Base destroyed: grey version
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < 16; x++) {
+        if (px[y][x] !== '.') px[y][x] = C.COL_BASE_DEAD;
+      }
+    }
+    this.define('base_dead', px, C.TILE, 2);
+  },
+
+  // --- MISC SPRITES (16x16 arrays drawn at 2x = 32x32) ---
+  _buildMisc() {
+    // Spawn flash star (8-pointed star)
+    const px = Array.from({length:16}, () => Array(16).fill('.'));
+    const W = '#FFFFFF';
+    for (let i = 0; i < 16; i++) { px[7][i] = W; px[8][i] = W; px[i][7] = W; px[i][8] = W; }
+    px[4][4]=W; px[4][11]=W; px[11][4]=W; px[11][11]=W;
+    px[5][5]=W; px[5][10]=W; px[10][5]=W; px[10][10]=W;
+    this.define('spawn_star', px, C.TILE, 2);
+    // Shield effect (circle outline)
+    const sp = Array.from({length:16}, () => Array(16).fill('.'));
+    const SC = 'rgba(100,200,255,0.5)';
+    for (let a = 0; a < 360; a += 10) {
+      const x = Math.round(7.5 + 6 * Math.cos(a * Math.PI / 180));
+      const y = Math.round(7.5 + 6 * Math.sin(a * Math.PI / 180));
+      if (x >= 0 && x < 16 && y >= 0 && y < 16) sp[y][x] = SC;
+    }
+    this.define('shield', sp, C.TILE, 2);
+  },
+};
+
+// ===== INPUT =====
+const Input = {
+  keys: {},
+  justPressed: {},
+  init() {
+    window.addEventListener('keydown', e => {
+      if (!this.keys[e.code]) this.justPressed[e.code] = true;
+      this.keys[e.code] = true;
+      if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+    });
+    window.addEventListener('keyup', e => { this.keys[e.code] = false; });
+  },
+  isDown(code) { return !!this.keys[code]; },
+  wasPressed(code) { return !!this.justPressed[code]; },
+  clearFrame() { this.justPressed = {}; },
+};
+
+// ===== AUDIO =====
+const Audio = {
+  ctx: null,
+  sfxGain: null,
+  bgmGain: null,
+  enabled: true,
+
+  init() {
+    try {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      this.sfxGain = this.ctx.createGain();
+      this.sfxGain.connect(this.ctx.destination);
+      this.bgmGain = this.ctx.createGain();
+      this.bgmGain.connect(this.ctx.destination);
+      this.setVolumes();
+    } catch(e) { this.enabled = false; }
+  },
+
+  setVolumes() {
+    if (!this.enabled) return;
+    this.sfxGain.gain.value = UI.settings.sfxVolume;
+    this.bgmGain.gain.value = UI.settings.bgmVolume;
+  },
+
+  resume() {
+    if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume();
+  },
+
+  // Play a simple tone burst
+  playTone(freq, duration, type, vol) {
+    if (!this.enabled) return;
+    this.resume();
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    osc.type = type || 'square';
+    osc.frequency.value = freq;
+    gain.gain.value = (vol || 0.3) * UI.settings.sfxVolume;
+    gain.gain.exponentialRampToValueAtTime(0.001, this.ctx.currentTime + duration);
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(this.ctx.currentTime);
+    osc.stop(this.ctx.currentTime + duration);
+  },
+
+  // Sound effects
+  shoot()      { this.playTone(880, 0.08, 'square', 0.2); },
+  shootStrong(){ this.playTone(440, 0.12, 'sawtooth', 0.25); },
+  explode()    { this.noiseBurst(0.2, 0.3); },
+  explodeBig() { this.noiseBurst(0.4, 0.5); },
+  hit()        { this.playTone(200, 0.05, 'square', 0.15); },
+  powerUp()    { this.playTone(523, 0.1, 'square', 0.2); setTimeout(() => this.playTone(784, 0.15, 'square', 0.2), 100); },
+  levelUp()    { [523,659,784].forEach((f,i) => setTimeout(() => this.playTone(f, 0.15, 'square', 0.25), i * 100)); },
+  menuSelect() { this.playTone(660, 0.05, 'square', 0.15); },
+  menuConfirm(){ this.playTone(880, 0.1, 'square', 0.2); },
+  gameOver()   { [440,330,220].forEach((f,i) => setTimeout(() => this.playTone(f, 0.3, 'square', 0.25), i * 200)); },
+  bulletWall() { this.playTone(150, 0.03, 'square', 0.1); },
+  bulletSteel(){ this.playTone(400, 0.05, 'triangle', 0.15); },
+
+  noiseBurst(duration, vol) {
+    if (!this.enabled) return;
+    this.resume();
+    const bufferSize = this.ctx.sampleRate * duration;
+    const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      data[i] = (Math.random() * 2 - 1) * (1 - i / bufferSize); // decay
+    }
+    const source = this.ctx.createBufferSource();
+    source.buffer = buffer;
+    const gain = this.ctx.createGain();
+    gain.gain.value = vol * UI.settings.sfxVolume;
+    source.connect(gain);
+    gain.connect(this.ctx.destination);
+    source.start();
+  },
+
+  // Simple BGM loop
+  bgmPlaying: false,
+  bgmOsc: null,
+  startBGM() {
+    if (!this.enabled || this.bgmPlaying) return;
+    this.bgmPlaying = true;
+    this._bgmLoop();
+  },
+  stopBGM() {
+    this.bgmPlaying = false;
+  },
+  _bgmLoop() {
+    if (!this.bgmPlaying) return;
+    // Simple 8-bit melody loop
+    const melody = [262,294,330,349,392,349,330,294,262,247,220,247,262,294,330,349];
+    let i = 0;
+    const play = () => {
+      if (!this.bgmPlaying) return;
+      this.playTone(melody[i % melody.length], 0.15, 'square', 0.08);
+      i++;
+      setTimeout(play, 180);
+    };
+    play();
+  },
+};
+
+// ===== SAVE =====
+// (Filled in Task 12)
+
+// ===== MAP =====
+const GameMap = {
+  grid: null,           // 26×26 array of terrain codes
+  brickHP: null,        // 26×26 array, brick sub-block HP (0-4, 4=full)
+  baseAlive: true,
+
+  load(stageIndex) {
+    this.baseAlive = true;
+    const data = MAPS[stageIndex % MAPS.length];
+    this.grid = [];
+    this.brickHP = [];
+    for (let r = 0; r < C.ROWS; r++) {
+      this.grid[r] = [];
+      this.brickHP[r] = [];
+      for (let c = 0; c < C.COLS; c++) {
+        const ch = data[r] ? parseInt(data[r][c]) || 0 : 0;
+        this.grid[r][c] = ch;
+        this.brickHP[r][c] = ch === C.T_BRICK ? 4 : 0;
+      }
+    }
+    // Protect exposed base tiles: replace eagle-wing 9s with brick walls,
+    // only keep the core 2x2 base at row 24-25, cols 12-13
+    this.protectExposedBase();
+    // Strengthen base protection: reinforce brick walls near base with extra HP
+    this.reinforceBase();
+  },
+
+  get(r, c) {
+    if (r < 0 || r >= C.ROWS || c < 0 || c >= C.COLS) return C.T_STEEL; // out of bounds = solid
+    return this.grid[r][c];
+  },
+
+  isSolid(r, c) {
+    const t = this.get(r, c);
+    return t === C.T_BRICK || t === C.T_STEEL || t === C.T_WATER || t === C.T_BASE;
+  },
+
+  // Check if a rectangle (pixel coords) collides with solid terrain
+  collides(x, y, w, h) {
+    const r1 = pixelToTile(y), r2 = pixelToTile(y + h - 1);
+    const c1 = pixelToTile(x), c2 = pixelToTile(x + w - 1);
+    for (let r = r1; r <= r2; r++) {
+      for (let c = c1; c <= c2; c++) {
+        if (this.isSolid(r, c)) return true;
+      }
+    }
+    return false;
+  },
+
+  // Bullet hits terrain at pixel (x,y). Returns: 'none','brick','steel','base'
+  bulletHit(bx, by, power) {
+    const r = pixelToTile(by);
+    const c = pixelToTile(bx);
+    const t = this.get(r, c);
+    if (t === C.T_BRICK) {
+      this.destroyBrick(r, c);
+      return 'brick';
+    }
+    if (t === C.T_STEEL) {
+      if (power >= 4) { // Lv4 can destroy steel
+        this.grid[r][c] = C.T_EMPTY;
+        return 'brick'; // same visual effect
+      }
+      return 'steel';
+    }
+    if (t === C.T_BASE && this.baseAlive) {
+      this.baseAlive = false;
+      this.grid[r][c] = C.T_EMPTY;
+      return 'base';
+    }
+    return 'none';
+  },
+
+  destroyBrick(r, c) {
+    if (this.get(r, c) === C.T_BRICK) {
+      this.grid[r][c] = C.T_EMPTY;
+    }
+  },
+
+  // Temporarily fortify base surroundings (shovel power-up)
+  fortifyBase(isSteel) {
+    // Base is at row 24-25, cols 12-13. Surround with brick/steel.
+    const br = 23, bc = 11; // top-left of base wall ring
+    const wallType = isSteel ? C.T_STEEL : C.T_BRICK;
+    for (let r = br; r <= br+3; r++) {
+      for (let c = bc; c <= bc+4; c++) {
+        if (r < 0 || r >= C.ROWS || c < 0 || c >= C.COLS) continue;
+        if (r === br || r === br+3 || c === bc || c === bc+4) {
+          if (this.get(r, c) !== C.T_BASE) {
+            this.grid[r][c] = wallType;
+          }
+        }
+      }
+    }
+  },
+
+  // Replace exposed base tiles (eagle wings) with brick walls
+  // Only keep the core 2x2 base at rows 24-25, cols 12-13
+  protectExposedBase() {
+    for (let r = 0; r < C.ROWS; r++) {
+      for (let c = 0; c < C.COLS; c++) {
+        if (this.grid[r][c] === C.T_BASE) {
+          // Check if this is the core base (rows 24-25, cols 12-13)
+          const isCore = (r === 24 || r === 25) && (c === 12 || c === 13);
+          if (!isCore) {
+            // Replace exposed base tile with brick
+            this.grid[r][c] = C.T_BRICK;
+            this.brickHP[r][c] = 8;
+          }
+        }
+      }
+    }
+  },
+
+  // Reinforce base walls: keep brick but boost HP so enemies take longer to break through
+  reinforceBase() {
+    // Scan entire bottom area near base and reinforce all bricks
+    for (let r = 22; r < C.ROWS; r++) {
+      for (let c = 0; c < C.COLS; c++) {
+        if (this.grid[r][c] === C.T_BRICK) {
+          this.brickHP[r][c] = 8; // double HP (normal brick = 4)
+        }
+      }
+    }
+  },
+
+  render(ctx) {
+    // Layer 1: ground + terrain (except trees)
+    for (let r = 0; r < C.ROWS; r++) {
+      for (let c = 0; c < C.COLS; c++) {
+        const t = this.grid[r][c];
+        const x = tileToPixel(c);
+        const y = tileToPixel(r);
+        if (t === C.T_EMPTY) continue;
+        if (t === C.T_ICE) {
+          Sprites.draw(ctx, 'terrain_ice', x, y);
+        } else if (t === C.T_BRICK) {
+          Sprites.draw(ctx, 'terrain_brick', x, y);
+        } else if (t === C.T_STEEL) {
+          Sprites.draw(ctx, 'terrain_steel', x, y);
+        } else if (t === C.T_WATER) {
+          Sprites.draw(ctx, 'terrain_water', x, y);
+        } else if (t === C.T_BASE) {
+          Sprites.draw(ctx, this.baseAlive ? 'base_ok' : 'base_dead', x, y);
+        }
+      }
+    }
+  },
+
+  // Trees render on a separate pass (above tanks)
+  renderTrees(ctx) {
+    for (let r = 0; r < C.ROWS; r++) {
+      for (let c = 0; c < C.COLS; c++) {
+        if (this.grid[r][c] === C.T_TREE) {
+          Sprites.draw(ctx, 'terrain_tree', tileToPixel(c), tileToPixel(r));
+        }
+      }
+    }
+  },
+};
+
+// ===== ENTITY =====
+
+class Bullet {
+  constructor(x, y, dir, speed, owner, power) {
+    this.x = x; this.y = y;
+    this.dir = dir;
+    this.speed = speed;
+    this.owner = owner; // 'player' or 'enemy'
+    this.power = power || 1;
+    this.alive = true;
+    this.w = C.BULLET_SIZE;
+    this.h = C.BULLET_SIZE;
+  }
+
+  update() {
+    this.x += C.DX[this.dir] * this.speed;
+    this.y += C.DY[this.dir] * this.speed;
+    // Out of bounds
+    if (this.x < 0 || this.x > C.STAGE_W - this.w || this.y < 0 || this.y > C.STAGE_H - this.h) {
+      this.alive = false;
+      return;
+    }
+    // Terrain collision
+    const cx = this.x + this.w / 2;
+    const cy = this.y + this.h / 2;
+    const hit = GameMap.bulletHit(cx, cy, this.power);
+    if (hit !== 'none') {
+      this.alive = false;
+      if (hit === 'brick') Audio.bulletWall();
+      if (hit === 'steel') Audio.bulletSteel();
+      // Spawn small explosion at impact point
+      if (hit === 'base') {
+        Engine.onBaseDestroyed();
+      }
+    }
+  }
+
+  render(ctx) {
+    Sprites.draw(ctx, `bullet_${this.dir}`, this.x, this.y);
+  }
+
+  getRect() { return { x: this.x, y: this.y, w: this.w, h: this.h }; }
+}
+
+class Explosion {
+  constructor(x, y, size) {
+    this.x = x; this.y = y;
+    this.size = size || 'small'; // small, medium, large
+    this.frame = 0;
+    this.maxFrame = 5;
+    this.timer = 0;
+    this.frameDur = 3; // ticks per frame
+    this.alive = true;
+  }
+
+  update() {
+    this.timer++;
+    if (this.timer >= this.frameDur) {
+      this.timer = 0;
+      this.frame++;
+      if (this.frame >= this.maxFrame) this.alive = false;
+    }
+  }
+
+  render(ctx) {
+    const spr = Sprites.atlas[`explosion_${this.frame}`];
+    if (spr) {
+      const ox = this.x - spr.width / 2;
+      const oy = this.y - spr.height / 2;
+      ctx.drawImage(spr, Math.round(ox), Math.round(oy));
+    }
+  }
+}
+
+class PowerUp {
+  constructor(x, y, type) {
+    this.x = x; this.y = y;
+    this.type = type;
+    this.alive = true;
+    this.timer = 0;
+    this.maxTimer = C.PU_DURATION / (1000 / C.FPS); // convert ms to ticks
+    this.blinkTimer = 0;
+  }
+
+  update() {
+    this.timer++;
+    this.blinkTimer++;
+    if (this.timer >= this.maxTimer) this.alive = false;
+  }
+
+  render(ctx) {
+    // Blink when about to expire (last 3 seconds)
+    const remaining = this.maxTimer - this.timer;
+    if (remaining < 180 && Math.floor(this.blinkTimer / 8) % 2 === 0) return;
+    Sprites.draw(ctx, `powerup_${this.type}`, this.x, this.y);
+  }
+
+  getRect() { return { x: this.x, y: this.y, w: C.POWERUP_SIZE, h: C.POWERUP_SIZE }; }
+}
+
+// ===== PLAYER =====
+const Player = {
+  x: 0, y: 0,
+  dir: C.UP,
+  level: 1,         // 1-4 weapon level
+  lives: C.P_INIT_LIVES,
+  alive: true,
+  invincible: false,
+  invincibleTimer: 0,
+  shieldHP: 0,       // from skill tree defense Lv1
+  spawnTimer: 0,
+  moving: false,
+  animFrame: 0,
+  animTimer: 0,
+  shootCooldown: 0,
+  bullets: [],
+  // Timed power-up states
+  spreadShots: 0,
+  hasMissile: false,
+  speedBoost: false,
+  speedBoostTimer: 0,
+  shieldAbsorb: false,
+
+  // Skill tree state (modified by skill system later)
+  skills: { fire: 0, defense: 0, mobility: 0 },
+
+  reset() {
+    this.level = 1;
+    this.lives = C.P_INIT_LIVES;
+    this.alive = true;
+    this.invincible = false;
+    this.shieldHP = 0;
+    this.skills = { fire: 0, defense: 0, mobility: 0 };
+  },
+
+  spawn() {
+    // Spawn at bottom center-left
+    this.x = tileToPixel(8);
+    this.y = tileToPixel(24);
+    this.dir = C.UP;
+    this.alive = true;
+    this.invincible = true;
+    this.invincibleTimer = 120; // 2 seconds at 60fps
+    this.spawnTimer = 120;
+    this.moving = false;
+    this.bullets = [];
+    this.shootCooldown = 0;
+    this.spreadShots = 0;
+    this.hasMissile = false;
+    this.speedBoost = false;
+    this.speedBoostTimer = 0;
+    this.shieldAbsorb = false;
+    // Reset shield HP from skill tree
+    this.shieldHP = this.skills.defense >= 1 ? 1 : 0;
+  },
+
+  getSpeed() {
+    let spd = C.P_SPEED[this.level];
+    if (this.skills.mobility >= 1) spd *= 1.15;
+    if (this.speedBoost) spd *= 2;
+    return spd;
+  },
+
+  getBulletSpeed() {
+    let spd = C.P_BULLET_SPEED[this.level];
+    if (this.skills.fire >= 1) spd *= 1.15;
+    return spd;
+  },
+
+  getMaxBullets() {
+    return C.P_MAX_BULLETS[this.level];
+  },
+
+  getShootCooldown() {
+    let cd = 3; // base cooldown in ticks
+    if (this.skills.fire >= 2) cd = Math.max(1, Math.floor(cd * 0.8));
+    return cd;
+  },
+
+  update() {
+    if (!this.alive) return;
+
+    // Spawn protection animation
+    if (this.spawnTimer > 0) {
+      this.spawnTimer--;
+      if (this.spawnTimer <= 0) {
+        this.invincible = false;
+      }
+    }
+
+    // Invincibility countdown
+    if (this.invincible && this.spawnTimer <= 0) {
+      this.invincibleTimer--;
+      if (this.invincibleTimer <= 0) this.invincible = false;
+    }
+
+    // Speed boost countdown
+    if (this.speedBoost) {
+      this.speedBoostTimer--;
+      if (this.speedBoostTimer <= 0) this.speedBoost = false;
+    }
+
+    // Movement
+    this.moving = false;
+    let nx = this.x, ny = this.y;
+    const spd = this.getSpeed();
+
+    if (Input.isDown('ArrowUp'))    { this.dir = C.UP;    ny -= spd; this.moving = true; }
+    else if (Input.isDown('ArrowDown'))  { this.dir = C.DOWN;  ny += spd; this.moving = true; }
+    else if (Input.isDown('ArrowLeft'))  { this.dir = C.LEFT;  nx -= spd; this.moving = true; }
+    else if (Input.isDown('ArrowRight')) { this.dir = C.RIGHT; nx += spd; this.moving = true; }
+
+    // Snap to grid perpendicular axis for smooth lane movement
+    if (this.dir === C.UP || this.dir === C.DOWN) {
+      // Snap X to nearest 16-pixel boundary (half-tile)
+      const targetX = Math.round(this.x / 16) * 16;
+      if (nx !== this.x) {
+        // Changing direction, snap
+      } else {
+        nx = this.x + (targetX - this.x) * 0.25;
+      }
+    } else {
+      const targetY = Math.round(this.y / 16) * 16;
+      if (ny !== this.y) {
+        // Changing direction, snap
+      } else {
+        ny = this.y + (targetY - this.y) * 0.25;
+      }
+    }
+
+    // Collision check
+    nx = clamp(nx, 0, C.STAGE_W - C.TANK_SIZE);
+    ny = clamp(ny, 0, C.STAGE_H - C.TANK_SIZE);
+    if (!GameMap.collides(nx, ny, C.TANK_SIZE, C.TANK_SIZE) && !this.collidesWithTanks(nx, ny)) {
+      this.x = nx;
+      this.y = ny;
+    }
+
+    // Animation
+    if (this.moving) {
+      this.animTimer++;
+      if (this.animTimer >= 6) {
+        this.animTimer = 0;
+        this.animFrame = 1 - this.animFrame;
+      }
+    }
+
+    // Shooting
+    if (this.shootCooldown > 0) this.shootCooldown--;
+    if ((Input.isDown('Space') || Input.isDown('KeyJ')) && this.shootCooldown <= 0) {
+      const activeBullets = this.bullets.filter(b => b.alive).length;
+      if (activeBullets < this.getMaxBullets()) {
+        this.shoot();
+        this.shootCooldown = this.getShootCooldown();
+      }
+    }
+
+    // Update bullets
+    for (const b of this.bullets) {
+      if (b.alive) b.update();
+    }
+    this.bullets = this.bullets.filter(b => b.alive);
+  },
+
+  shoot() {
+    Audio.shoot();
+    const cx = this.x + C.TANK_SIZE / 2;
+    const cy = this.y + C.TANK_SIZE / 2;
+    const speed = this.getBulletSpeed();
+    const power = this.level;
+
+    if (this.hasMissile) {
+      // Missile: pierces through bricks
+      const bx = cx + C.DX[this.dir] * (C.TANK_SIZE / 2) - C.BULLET_SIZE / 2;
+      const by = cy + C.DY[this.dir] * (C.TANK_SIZE / 2) - C.BULLET_SIZE / 2;
+      const b = new Bullet(bx, by, this.dir, speed, 'player', power);
+      b.pierce = true; // custom flag for missile
+      this.bullets.push(b);
+      this.hasMissile = false;
+      return;
+    }
+
+    if (this.spreadShots > 0) {
+      // Spread: 3 bullets in a fan
+      const dirs = [this.dir, (this.dir + 3) % 4, (this.dir + 1) % 4];
+      for (const d of dirs) {
+        const bx = cx + C.DX[d] * (C.TANK_SIZE / 2) - C.BULLET_SIZE / 2;
+        const by = cy + C.DY[d] * (C.TANK_SIZE / 2) - C.BULLET_SIZE / 2;
+        this.bullets.push(new Bullet(bx, by, d, speed, 'player', power));
+      }
+      this.spreadShots--;
+    } else {
+      const bx = cx + C.DX[this.dir] * (C.TANK_SIZE / 2) - C.BULLET_SIZE / 2;
+      const by = cy + C.DY[this.dir] * (C.TANK_SIZE / 2) - C.BULLET_SIZE / 2;
+      this.bullets.push(new Bullet(bx, by, this.dir, speed, 'player', power));
+    }
+  },
+
+  collidesWithTanks(nx, ny) {
+    // Check collision with enemy tanks
+    for (const e of Engine.enemies) {
+      if (!e.alive) continue;
+      if (rectOverlap(
+        { x: nx, y: ny, w: C.TANK_SIZE, h: C.TANK_SIZE },
+        { x: e.x, y: e.y, w: e.size, h: e.size }
+      )) return true;
+    }
+    return false;
+  },
+
+  hit() {
+    if (this.invincible) return;
+    // Shield absorb from power-up
+    if (this.shieldAbsorb) {
+      this.shieldAbsorb = false;
+      this.invincible = true;
+      this.invincibleTimer = 60;
+      return;
+    }
+    // Shield HP from skill tree
+    if (this.shieldHP > 0) {
+      this.shieldHP--;
+      this.invincible = true;
+      this.invincibleTimer = 60;
+      return;
+    }
+    // Dodge from skill tree
+    if (this.skills.defense >= 4 && Math.random() < 0.2) return;
+
+    // Downgrade level
+    if (this.level > 1) {
+      this.level--;
+      this.invincible = true;
+      this.invincibleTimer = 90;
+    } else {
+      // Lose a life
+      this.die();
+    }
+  },
+
+  die() {
+    this.lives--;
+    Audio.explodeBig();
+    speak('oh oh');
+    Engine.explosions.push(new Explosion(
+      this.x + C.TANK_SIZE / 2,
+      this.y + C.TANK_SIZE / 2,
+      'medium'
+    ));
+    Particles.emit(this.x + C.TANK_SIZE / 2, this.y + C.TANK_SIZE / 2, 10, '#FFD700', 2, 25);
+    if (this.lives <= 0) {
+      this.alive = false;
+      Engine.onPlayerDead();
+    } else {
+      // Respawn
+      this.spawn();
+    }
+  },
+
+  render(ctx) {
+    if (!this.alive) return;
+    // Spawn flash
+    if (this.spawnTimer > 0 && Math.floor(this.spawnTimer / 4) % 2 === 0) {
+      Sprites.draw(ctx, 'spawn_star', this.x, this.y);
+      return;
+    }
+    // Draw tank
+    const lv = this.level - 1;
+    Sprites.draw(ctx, `player_${lv}_${this.dir}_${this.animFrame}`, this.x, this.y);
+    // Invincibility shield
+    if (this.invincible && Math.floor(Date.now() / 100) % 2 === 0) {
+      Sprites.draw(ctx, 'shield', this.x, this.y);
+    }
+    // Draw bullets
+    for (const b of this.bullets) {
+      if (b.alive) b.render(ctx);
+    }
+  },
+
+  getRect() { return { x: this.x, y: this.y, w: C.TANK_SIZE, h: C.TANK_SIZE }; },
+
+  applyPowerUp(type) {
+    Audio.powerUp();
+    switch (type) {
+      case C.PU_STAR:
+        if (this.level < 4) this.level++;
+        break;
+      case C.PU_BOMB:
+        // Kill all on-screen enemies
+        for (const e of Engine.enemies) {
+          if (e.alive) {
+            e.alive = false;
+            Engine.explosions.push(new Explosion(e.x + e.size/2, e.y + e.size/2, 'medium'));
+            Engine.addScore(e.typeDef.hp * 50);
+            Engine.kills++;
+            Engine.addXP(e.xpValue || 10);
+          }
+        }
+        break;
+      case C.PU_SHOVEL:
+        GameMap.fortifyBase(true);
+        // Schedule revert after 10 seconds
+        setTimeout(() => { if (Engine.state === 'playing') GameMap.fortifyBase(false); }, 10000);
+        break;
+      case C.PU_HELMET:
+        this.invincible = true;
+        this.invincibleTimer = 600; // 10 seconds
+        break;
+      case C.PU_CLOCK:
+        Engine.freezeEnemies = 300; // 5 seconds
+        break;
+      case C.PU_TANK:
+        this.lives++;
+        break;
+      case C.PU_SPREAD:
+        this.spreadShots = 3;
+        break;
+      case C.PU_MISSILE:
+        this.hasMissile = true;
+        break;
+      case C.PU_SPEED:
+        this.speedBoost = true;
+        this.speedBoostTimer = 600; // 10 seconds
+        break;
+      case C.PU_SHIELD:
+        this.shieldAbsorb = true;
+        break;
+    }
+  },
+};
+
+// ===== ENEMY =====
+class EnemyTank {
+  constructor(x, y, typeDef, stage) {
+    this.x = x; this.y = y;
+    this.typeDef = typeDef;
+    this.hp = typeDef.hp;
+    this.speed = typeDef.speed;
+    this.bulletSpeed = typeDef.bulletSpeed;
+    this.dir = C.DOWN;
+    this.alive = true;
+    this.size = C.TANK_SIZE;
+    this.isBoss = false;
+    this.moving = true;
+    this.animFrame = 0;
+    this.animTimer = 0;
+    this.bullets = [];
+    this.shootCooldown = 0;
+    this.shootInterval = 60 + randInt(0, 60);
+    this.dirChangeTimer = randInt(60, 180);
+    this.spawnTimer = 60;
+    this.dropsPowerUp = Math.random() < 0.35; // 35% chance to drop power-up
+    this.xpValue = {basic:10,fast:15,power:20,armor:30,elite:40}[typeDef.name] || 10;
+    // AI
+    this.aiLevel = this.calcAILevel(stage);
+    this.targetDir = this.dir;
+    this.stuckTimer = 0;
+    this.lastX = x;
+    this.lastY = y;
+  }
+
+  calcAILevel(stage) {
+    if (stage <= 4) return 0;
+    if (stage <= 9) return 1;
+    if (stage <= 14) return 2;
+    return 3;
+  }
+
+  update() {
+    if (this.spawnTimer > 0) { this.spawnTimer--; return; }
+
+    // AI decision
+    this.aiUpdate();
+
+    // Movement
+    if (this.moving) {
+      const nx = this.x + C.DX[this.dir] * this.speed;
+      const ny = this.y + C.DY[this.dir] * this.speed;
+      const cnx = clamp(nx, 0, C.STAGE_W - this.size);
+      const cny = clamp(ny, 0, C.STAGE_H - this.size);
+      const blocked = GameMap.collides(cnx, cny, this.size, this.size) ||
+                      this.collidesWithTanks(cnx, cny) ||
+                      (Player.alive && rectOverlap(
+                        {x:cnx, y:cny, w:this.size, h:this.size},
+                        Player.getRect()
+                      ));
+      if (!blocked) {
+        this.x = cnx; this.y = cny;
+      } else {
+        this.stuckTimer++;
+        if (this.stuckTimer > 15) {
+          this.changeDir();
+          this.stuckTimer = 0;
+        }
+      }
+    }
+
+    // Check if stuck
+    if (Math.abs(this.x - this.lastX) < 0.1 && Math.abs(this.y - this.lastY) < 0.1) {
+      this.stuckTimer++;
+    } else {
+      this.stuckTimer = 0;
+    }
+    this.lastX = this.x;
+    this.lastY = this.y;
+
+    // Shooting
+    if (this.shootCooldown > 0) this.shootCooldown--;
+    if (this.shootCooldown <= 0 && this.shouldShoot()) {
+      this.shoot();
+      this.shootCooldown = this.shootInterval;
+    }
+
+    // Update bullets
+    for (const b of this.bullets) {
+      if (b.alive) b.update();
+    }
+    this.bullets = this.bullets.filter(b => b.alive);
+  }
+
+  aiUpdate() {
+    this.dirChangeTimer--;
+    if (this.dirChangeTimer <= 0 || this.stuckTimer > 30) {
+      this.changeDir();
+      this.dirChangeTimer = randInt(60, 180);
+    }
+  }
+
+  changeDir() {
+    // Base: random direction
+    const dirs = [C.UP, C.DOWN, C.LEFT, C.RIGHT];
+
+    if (this.aiLevel === 0) {
+      this.dir = dirs[randInt(0, 3)];
+    } else if (this.aiLevel === 1) {
+      // 30% chance toward base (down)
+      if (Math.random() < 0.3) {
+        this.dir = C.DOWN;
+      } else {
+        this.dir = dirs[randInt(0, 3)];
+      }
+    } else if (this.aiLevel === 2) {
+      // Aim at player 50%, base 30%, random 20%
+      const r = Math.random();
+      if (r < 0.5 && Player.alive) {
+        this.dir = this.dirToward(Player.x, Player.y);
+      } else if (r < 0.8) {
+        this.dir = C.DOWN; // toward base
+      } else {
+        this.dir = dirs[randInt(0, 3)];
+      }
+    } else {
+      // Expert: aim at player 70%, base 20%, flank 10%
+      const r = Math.random();
+      if (r < 0.7 && Player.alive) {
+        this.dir = this.dirToward(Player.x, Player.y);
+      } else if (r < 0.9) {
+        this.dir = this.dirToward(C.STAGE_W / 2, C.STAGE_H);
+      } else {
+        this.dir = dirs[randInt(0, 3)];
+      }
+    }
+  }
+
+  dirToward(tx, ty) {
+    const dx = tx - this.x;
+    const dy = ty - this.y;
+    if (Math.abs(dx) > Math.abs(dy)) {
+      return dx > 0 ? C.RIGHT : C.LEFT;
+    }
+    return dy > 0 ? C.DOWN : C.UP;
+  }
+
+  shouldShoot() {
+    if (this.aiLevel === 0) return Math.random() < 0.02;
+    if (this.aiLevel === 1) {
+      // 50% chance to shoot toward player
+      if (Player.alive && this.isAlignedWith(Player.x, Player.y)) return true;
+      return Math.random() < 0.03;
+    }
+    // Level 2+: shoot when aligned with player or base
+    if (Player.alive && this.isAlignedWith(Player.x, Player.y)) return Math.random() < 0.15;
+    if (this.isAlignedWith(C.STAGE_W / 2, C.STAGE_H - C.TILE)) return Math.random() < 0.1;
+    return Math.random() < 0.04;
+  }
+
+  isAlignedWith(tx, ty) {
+    const margin = C.TANK_SIZE;
+    if (this.dir === C.UP || this.dir === C.DOWN) {
+      return Math.abs(this.x - tx) < margin;
+    }
+    return Math.abs(this.y - ty) < margin;
+  }
+
+  shoot() {
+    const cx = this.x + this.size / 2;
+    const cy = this.y + this.size / 2;
+    const bx = cx + C.DX[this.dir] * (this.size / 2) - C.BULLET_SIZE / 2;
+    const by = cy + C.DY[this.dir] * (this.size / 2) - C.BULLET_SIZE / 2;
+    this.bullets.push(new Bullet(bx, by, this.dir, this.bulletSpeed, 'enemy', 1));
+  }
+
+  collidesWithTanks(nx, ny) {
+    for (const e of Engine.enemies) {
+      if (e === this || !e.alive) continue;
+      if (rectOverlap({x:nx,y:ny,w:this.size,h:this.size}, e.getRect())) return true;
+    }
+    return false;
+  }
+
+  renderAnim() {
+    if (this.moving) {
+      this.animTimer++;
+      if (this.animTimer >= 8) { this.animTimer = 0; this.animFrame = 1 - this.animFrame; }
+    }
+  }
+
+  render(ctx) {
+    if (this.spawnTimer > 0) {
+      if (Math.floor(this.spawnTimer / 4) % 2 === 0) {
+        Sprites.draw(ctx, 'spawn_star', this.x, this.y);
+      }
+      return;
+    }
+    // Flashing if drops power-up
+    const name = this.typeDef.name;
+    Sprites.draw(ctx, `enemy_${name}_${this.dir}_${this.animFrame}`, this.x, this.y);
+    if (this.dropsPowerUp && Math.floor(Date.now() / 200) % 2 === 0) {
+      ctx.fillStyle = 'rgba(255,0,0,0.3)';
+      ctx.fillRect(this.x, this.y, this.size, this.size);
+    }
+    // Boss HP bar rendered by HUD
+    for (const b of this.bullets) if (b.alive) b.render(ctx);
+  }
+
+  getRect() { return { x: this.x, y: this.y, w: this.size, h: this.size }; }
+}
+
+class BossTank extends EnemyTank {
+  constructor(x, y, stage) {
+    super(x, y, { name:'armor', color:'#D00', hp: 10 + stage, speed: 1.2, bulletSpeed: 5.0, minStage:1 }, stage);
+    this.size = C.BOSS_SIZE;
+    this.isBoss = true;
+    this.hp = 10 + stage;
+    this.dropsPowerUp = true;
+    this.xpValue = 100;
+    this.shootInterval = 40;
+    this.burstCooldown = 0;
+  }
+
+  update() {
+    super.update();
+    // Boss special: burst fire
+    if (this.burstCooldown > 0) this.burstCooldown--;
+    if (this.burstCooldown <= 0 && this.spawnTimer <= 0) {
+      if (Math.random() < 0.01) {
+        this.burstFire();
+        this.burstCooldown = 120;
+      }
+    }
+  }
+
+  burstFire() {
+    // Fire 3 bullets in a spread
+    const cx = this.x + this.size / 2;
+    const cy = this.y + this.size / 2;
+    const dirs = [this.dir, (this.dir + 3) % 4, (this.dir + 1) % 4];
+    for (const d of dirs) {
+      const bx = cx + C.DX[d] * (this.size / 2) - C.BULLET_SIZE / 2;
+      const by = cy + C.DY[d] * (this.size / 2) - C.BULLET_SIZE / 2;
+      this.bullets.push(new Bullet(bx, by, d, this.bulletSpeed, 'enemy', 1));
+    }
+  }
+
+  render(ctx) {
+    if (this.spawnTimer > 0) {
+      if (Math.floor(this.spawnTimer / 4) % 2 === 0) {
+        Sprites.draw(ctx, 'spawn_star', this.x, this.y);
+      }
+      return;
+    }
+    Sprites.draw(ctx, `boss_${this.dir}_${this.animFrame}`, this.x, this.y);
+    for (const b of this.bullets) if (b.alive) b.render(ctx);
+  }
+}
+
+// ===== AI =====
+// AI logic is embedded within EnemyTank class methods (aiUpdate, changeDir, shouldShoot)
+
+// ===== PARTICLE =====
+const Particles = {
+  list: [],
+
+  emit(x, y, count, color, speed, life) {
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const spd = speed * (0.5 + Math.random());
+      this.list.push({
+        x, y,
+        vx: Math.cos(angle) * spd,
+        vy: Math.sin(angle) * spd,
+        life: life || 30,
+        maxLife: life || 30,
+        color: color || '#FF8800',
+        size: 1 + Math.random() * 2,
+      });
+    }
+  },
+
+  update() {
+    for (const p of this.list) {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vx *= 0.95;
+      p.vy *= 0.95;
+      p.life--;
+    }
+    this.list = this.list.filter(p => p.life > 0);
+  },
+
+  render(ctx) {
+    for (const p of this.list) {
+      const alpha = p.life / p.maxLife;
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = p.color;
+      ctx.fillRect(Math.round(p.x), Math.round(p.y), Math.ceil(p.size), Math.ceil(p.size));
+    }
+    ctx.globalAlpha = 1;
+  },
+
+  clear() { this.list = []; },
+};
+
+// ===== HUD =====
+const HUD = {
+  render(ctx) {
+    // This renders the side panels using DOM manipulation
+    this.updateLeftPanel();
+    this.updateRightPanel();
+  },
+
+  updateLeftPanel() {
+    const panel = document.getElementById('leftPanel');
+    const remaining = Engine.enemiesLeft + Engine.enemies.filter(e => e.alive).length;
+    let html = '<div style="color:#F0F0F0;font-size:16px;margin-bottom:8px;text-align:center;">ENEMY</div>';
+    // Show small tank icons for remaining enemies
+    for (let i = 0; i < remaining; i++) {
+      html += '<div style="width:16px;height:16px;background:#888;display:inline-block;margin:2px;"></div>';
+      if ((i + 1) % 3 === 0) html += '<br>';
+    }
+    panel.innerHTML = html;
+  },
+
+  updateRightPanel() {
+    const panel = document.getElementById('rightPanel');
+    const xpNeeded = 100 * (Engine.skillPoints + 1);
+    const xpPct = Math.min(100, Math.floor(Engine.xp / xpNeeded * 100));
+    let html = `
+      <div style="color:#FFD700;font-size:16px;text-align:center;">ST ${Engine.stage}</div>
+      <div style="color:#FFF;font-size:16px;margin-top:10px;">♥ ${Player.lives}</div>
+      <div style="color:#FFD700;font-size:16px;margin-top:6px;">Lv ${Player.level}</div>
+      <div style="margin-top:6px;width:90px;height:10px;background:#333;border:1px solid #555;">
+        <div style="width:${xpPct}%;height:100%;background:#4A4;"></div>
+      </div>
+      <div style="color:#F0F0F0;font-size:12px;margin-top:2px;">XP ${Engine.xp}/${xpNeeded}</div>
+      <div style="color:#FFF;font-size:16px;margin-top:10px;">${Engine.score}</div>
+      <div style="color:#F0F0F0;font-size:12px;">SCORE</div>
+    `;
+    // Skill overview
+    html += `
+      <div style="margin-top:14px;color:#F0F0F0;font-size:12px;">SKILLS</div>
+      <div style="color:#F44;font-size:13px;">🔫${Player.skills.fire}</div>
+      <div style="color:#4AF;font-size:13px;">🛡${Player.skills.defense}</div>
+      <div style="color:#4F4;font-size:13px;">⚡${Player.skills.mobility}</div>
+    `;
+    // Boss HP bar
+    const boss = Engine.enemies.find(e => e.isBoss && e.alive);
+    if (boss) {
+      const maxHP = 10 + Engine.stage;
+      const pct = Math.floor(boss.hp / maxHP * 100);
+      html += `
+        <div style="margin-top:14px;color:#F44;font-size:13px;">BOSS</div>
+        <div style="width:90px;height:12px;background:#333;border:1px solid #F00;">
+          <div style="width:${pct}%;height:100%;background:#F44;"></div>
+        </div>
+      `;
+    }
+    panel.innerHTML = html;
+    // Controls hint at bottom of right panel
+    const hint = document.getElementById('controlsHint');
+    if (hint) {
+      hint.innerHTML = `
+        <div style="color:#FFD700;font-size:12px;margin-top:10px;border-top:1px solid #FFD700;padding-top:8px;">操作说明</div>
+        <div style="color:#FFF;font-size:11px;margin-top:4px;"><span style="color:#0FF;">↑↓←→</span> 移动</div>
+        <div style="color:#FFF;font-size:11px;margin-top:2px;"><span style="color:#0FF;">Space</span> 射击</div>
+        <div style="color:#FFF;font-size:11px;margin-top:2px;"><span style="color:#0FF;">P</span> 暂停</div>
+        <div style="color:#FFF;font-size:11px;margin-top:2px;"><span style="color:#0FF;">T</span> 技能树</div>
+      `;
+    }
+  },
+};
+
+// ===== UI =====
+const UI = {
+  menuIndex: 0,
+  menuItems: ['开始游戏', '继续游戏', '排行榜', '设置'],
+  settings: {
+    sfxVolume: 0.7,
+    bgmVolume: 0.5,
+    keyBindings: {
+      up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight',
+      shoot: 'Space', pause: 'KeyP',
+    },
+  },
+  hasSave: false,
+  leaderboard: [],
+  nameInput: '',
+  nameInputActive: false,
+  // Multi-save slot state
+  slotIndex: 0,
+  slotMode: null,         // 'new' | 'load' | null
+  slotNameInput: '',
+  slotConfirmDelete: -1,
+
+  init() {
+    this.loadSettings();
+    this.loadLeaderboard();
+    this._loadSavesArray();
+    this.hasSave = this._getSaves().some(s => s !== null);
+  },
+
+  loadSettings() {
+    try {
+      const s = JSON.parse(localStorage.getItem('tankBattle_settings'));
+      if (s) Object.assign(this.settings, s);
+    } catch(e) {}
+  },
+
+  saveSettings() {
+    localStorage.setItem('tankBattle_settings', JSON.stringify(this.settings));
+  },
+
+  loadLeaderboard() {
+    try {
+      this.leaderboard = JSON.parse(localStorage.getItem('tankBattle_records')) || [];
+    } catch(e) { this.leaderboard = []; }
+  },
+
+  saveLeaderboard() {
+    localStorage.setItem('tankBattle_records', JSON.stringify(this.leaderboard.slice(0, 10)));
+  },
+
+  _getSaves() {
+    try {
+      return JSON.parse(localStorage.getItem('tankBattle_saves')) || new Array(6).fill(null);
+    } catch(e) { return new Array(6).fill(null); }
+  },
+
+  _setSaves(saves) {
+    localStorage.setItem('tankBattle_saves', JSON.stringify(saves));
+  },
+
+  _loadSavesArray() {
+    const saves = this._getSaves();
+    if (saves.every(s => s === null)) {
+      try {
+        const old = JSON.parse(localStorage.getItem('tankBattle_save'));
+        if (old) {
+          saves[0] = { ...old, name: 'OLD', date: new Date().toLocaleDateString() };
+          this._setSaves(saves);
+          localStorage.removeItem('tankBattle_save');
+        }
+      } catch(e) {}
+    }
+  },
+
+  addRecord(name, score, stage, kills) {
+    this.leaderboard.push({ name, score, stage, kills, date: new Date().toLocaleDateString() });
+    this.leaderboard.sort((a,b) => b.score - a.score);
+    this.leaderboard = this.leaderboard.slice(0, 10);
+    this.saveLeaderboard();
+  },
+
+  saveGame() {
+    if (Engine.currentSlot < 0) return;
+    const saves = this._getSaves();
+    const existing = saves[Engine.currentSlot];
+    const data = {
+      name: existing ? existing.name : 'AAA',
+      stage: Engine.stage,
+      lives: Player.lives,
+      level: Player.level,
+      xp: Engine.xp,
+      skillPoints: Engine.skillPoints,
+      skills: Player.skills,
+      totalScore: Engine.score,
+      kills: Engine.kills,
+      date: new Date().toLocaleDateString(),
+    };
+    saves[Engine.currentSlot] = data;
+    this._setSaves(saves);
+    this.hasSave = true;
+  },
+
+  loadGame(slotIndex) {
+    try {
+      const saves = this._getSaves();
+      const data = saves[slotIndex];
+      if (!data) return false;
+      Engine.currentSlot = slotIndex;
+      Engine.stage = data.stage;
+      Engine.score = data.totalScore || 0;
+      Engine.kills = data.kills || 0;
+      Engine.xp = data.xp || 0;
+      Engine.skillPoints = data.skillPoints || 0;
+      Engine._goSnd = false;
+      Engine._goAutoSaved = false;
+      Player.lives = data.lives;
+      Player.level = data.level;
+      Player.skills = data.skills || { fire: 0, defense: 0, mobility: 0 };
+      Player.reset();
+      Player.lives = data.lives;
+      Player.level = data.level;
+      Player.skills = data.skills || { fire: 0, defense: 0, mobility: 0 };
+      Engine.loadStage();
+      return true;
+    } catch(e) { return false; }
+  },
+
+  renderMenu(ctx) {
+    ctx.fillStyle = C.COL_BG;
+    ctx.fillRect(0, 0, C.STAGE_W, C.STAGE_H);
+
+    // Title
+    ctx.fillStyle = '#FFD700';
+    ctx.font = 'bold 32px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('坦克大战', C.STAGE_W / 2, 140);
+    ctx.fillStyle = '#F0F0F0';
+    ctx.font = '18px Arial, sans-serif';
+    ctx.fillText('BATTLE CITY', C.STAGE_W / 2, 170);
+
+    // Menu items
+    const items = this.hasSave ? this.menuItems : this.menuItems.filter((_,i) => i !== 1);
+    for (let i = 0; i < items.length; i++) {
+      const y = 280 + i * 48;
+      if (i === this.menuIndex) {
+        ctx.fillStyle = '#FFD700';
+        ctx.fillText('▶ ', C.STAGE_W / 2 - 100, y);
+      }
+      ctx.fillStyle = i === this.menuIndex ? '#FFF' : '#888';
+      ctx.fillText(items[i], C.STAGE_W / 2, y);
+    }
+
+    // Controls hint
+    ctx.fillStyle = '#FFD700';
+    ctx.font = '14px Arial, sans-serif';
+    ctx.fillText('↑↓←→ 移动  Space 射击  P 暂停', C.STAGE_W / 2, C.STAGE_H - 50);
+    ctx.fillStyle = '#F0F0F0';
+    ctx.fillText('↑↓ 选择  Enter 确认', C.STAGE_W / 2, C.STAGE_H - 28);
+  },
+
+  updateMenu() {
+    const items = this.hasSave ? this.menuItems : this.menuItems.filter((_,i) => i !== 1);
+    if (Input.wasPressed('ArrowUp')) { this.menuIndex = (this.menuIndex - 1 + items.length) % items.length; Audio.menuSelect(); }
+    if (Input.wasPressed('ArrowDown')) { this.menuIndex = (this.menuIndex + 1) % items.length; Audio.menuSelect(); }
+    if (Input.wasPressed('Enter')) {
+      Audio.menuConfirm();
+      const item = items[this.menuIndex];
+      if (item === '开始游戏') { this.slotMode = 'new'; this.slotIndex = 0; Engine.setState('slotSelect'); }
+      else if (item === '继续游戏') { this.slotMode = 'load'; this.slotIndex = 0; Engine.setState('slotSelect'); }
+      else if (item === '排行榜') { Engine.setState('leaderboard'); }
+      else if (item === '设置') { Engine.setState('settings'); }
+    }
+  },
+
+  renderLeaderboard(ctx) {
+    ctx.fillStyle = C.COL_BG;
+    ctx.fillRect(0, 0, C.STAGE_W, C.STAGE_H);
+    ctx.fillStyle = '#FFD700';
+    ctx.font = '22px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('排 行 榜', C.STAGE_W / 2, 50);
+    ctx.fillStyle = '#F0F0F0';
+    ctx.font = '16px Arial, sans-serif';
+    for (let i = 0; i < this.leaderboard.length; i++) {
+      const r = this.leaderboard[i];
+      const y = 100 + i * 32;
+      ctx.fillStyle = i === 0 ? '#FFD700' : '#FFF';
+      ctx.textAlign = 'left';
+      ctx.fillText(`${i+1}. ${r.name}`, 60, y);
+      ctx.fillText(`${r.score}`, 380, y);
+      ctx.fillText(`St${r.stage}`, 560, y);
+      ctx.fillText(`${r.kills}K`, 680, y);
+    }
+    ctx.fillStyle = '#E0E0E0';
+    ctx.textAlign = 'center';
+    ctx.fillText('按 Esc 返回', C.STAGE_W / 2, C.STAGE_H - 30);
+  },
+
+  updateLeaderboard() {
+    if (Input.wasPressed('Escape') || Input.wasPressed('Enter')) {
+      Engine.setState('menu');
+    }
+  },
+
+  renderSettings(ctx) {
+    ctx.fillStyle = C.COL_BG;
+    ctx.fillRect(0, 0, C.STAGE_W, C.STAGE_H);
+    ctx.fillStyle = '#FFD700';
+    ctx.font = '22px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('设 置', C.STAGE_W / 2, 50);
+    ctx.fillStyle = '#FFF';
+    ctx.font = '16px Arial, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(`音效音量: ${Math.round(this.settings.sfxVolume * 100)}%`, 60, 120);
+    ctx.fillText(`音乐音量: ${Math.round(this.settings.bgmVolume * 100)}%`, 60, 160);
+    ctx.fillText('按 ← → 调整', 60, 220);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#E0E0E0';
+    ctx.fillText('按 Esc 返回', C.STAGE_W / 2, C.STAGE_H - 30);
+  },
+
+  updateSettings() {
+    if (Input.wasPressed('Escape')) {
+      this.saveSettings();
+      Engine.setState('menu');
+    }
+    if (Input.wasPressed('ArrowLeft')) {
+      this.settings.sfxVolume = Math.max(0, this.settings.sfxVolume - 0.1);
+      this.settings.bgmVolume = Math.max(0, this.settings.bgmVolume - 0.1);
+      Audio.setVolumes();
+    }
+    if (Input.wasPressed('ArrowRight')) {
+      this.settings.sfxVolume = Math.min(1, this.settings.sfxVolume + 0.1);
+      this.settings.bgmVolume = Math.min(1, this.settings.bgmVolume + 0.1);
+      Audio.setVolumes();
+    }
+  },
+
+  renderGameOver(ctx) {
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(0, 0, C.STAGE_W, C.STAGE_H);
+    ctx.fillStyle = '#FF4444';
+    ctx.font = '28px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('GAME OVER', C.STAGE_W / 2, 180);
+
+    ctx.fillStyle = '#FFF';
+    ctx.font = '16px Arial, sans-serif';
+    ctx.fillText(`最终得分: ${Engine.score}`, C.STAGE_W / 2, 240);
+    ctx.fillText(`到达关卡: ${Engine.stage}`, C.STAGE_W / 2, 272);
+    ctx.fillText(`总击杀: ${Engine.kills}`, C.STAGE_W / 2, 304);
+
+    if (this._goAutoSaved) {
+      ctx.fillStyle = '#4F4';
+      ctx.fillText('记录已自动保存', C.STAGE_W / 2, 380);
+      ctx.fillStyle = '#F0F0F0';
+      ctx.fillText('按 Enter 查看排行榜  Esc 返回主菜单', C.STAGE_W / 2, 416);
+    } else if (this.nameInputActive) {
+      ctx.fillStyle = '#FFD700';
+      ctx.fillText('输入名字 (最多20字符):', C.STAGE_W / 2, 380);
+      ctx.font = '24px Arial, sans-serif';
+      ctx.fillText(this.nameInput + '_', C.STAGE_W / 2, 420);
+      ctx.font = '14px Arial, sans-serif';
+      ctx.fillStyle = '#F0F0F0';
+      ctx.fillText('Shift切换大小写, Enter 确认', C.STAGE_W / 2, 460);
+    } else {
+      ctx.fillStyle = '#FFD700';
+      ctx.fillText('按 Enter 保存记录', C.STAGE_W / 2, 380);
+      ctx.fillStyle = '#F0F0F0';
+      ctx.fillText('按 Esc 返回主菜单', C.STAGE_W / 2, 416);
+    }
+  },
+
+  updateGameOver() {
+    if (this._goAutoSaved) {
+      // Record was auto-saved from save slot name
+      if (Input.wasPressed('Enter')) {
+        Engine.setState('leaderboard');
+      }
+      if (Input.wasPressed('Escape')) {
+        Engine.setState('menu');
+      }
+    } else if (this.nameInputActive) {
+      // Manual name input (no save slot)
+      const shift = Input.isDown('ShiftLeft') || Input.isDown('ShiftRight');
+      for (const code of Object.keys(Input.justPressed)) {
+        if (code.startsWith('Key') && this.nameInput.length < 20) {
+          const ch = code.replace('Key', '');
+          this.nameInput += shift ? ch : ch.toLowerCase();
+        }
+      }
+      for (const code of Object.keys(Input.justPressed)) {
+        if (code.startsWith('Digit') && this.nameInput.length < 20) {
+          const ch = code.replace('Digit', '');
+          this.nameInput += shift ? ')!@#$%^&*('.charAt(parseInt(ch)) : ch;
+        }
+      }
+      if (Input.wasPressed('Enter') && this.nameInput.length >= 1) {
+        this.addRecord(
+          this.nameInput.substring(0, 20),
+          Engine.score, Engine.stage, Engine.kills
+        );
+        this.nameInputActive = false;
+        this.nameInput = '';
+        Engine.setState('leaderboard');
+      }
+      if (Input.wasPressed('Backspace')) {
+        this.nameInput = this.nameInput.slice(0, -1);
+      }
+    } else {
+      if (Input.wasPressed('Enter')) {
+        this.nameInputActive = true;
+        this.nameInput = '';
+      }
+      if (Input.wasPressed('Escape')) {
+        Engine.setState('menu');
+      }
+    }
+  },
+
+  // ===== Save Slot UI =====
+  renderSlotSelect(ctx) {
+    ctx.fillStyle = C.COL_BG;
+    ctx.fillRect(0, 0, C.STAGE_W, C.STAGE_H);
+
+    const saves = this._getSaves();
+    const title = this.slotMode === 'new' ? '选择存档位' : '读取存档';
+    ctx.fillStyle = '#FFD700';
+    ctx.font = 'bold 24px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(title, C.STAGE_W / 2, 50);
+
+    // If loading and no saves exist, show message
+    const hasAnySave = saves.some(s => s !== null);
+    if (this.slotMode === 'load' && !hasAnySave) {
+      ctx.fillStyle = '#888';
+      ctx.font = '18px Arial, sans-serif';
+      ctx.fillText('暂无存档', C.STAGE_W / 2, 400);
+    }
+
+    // Render 6 slots in 2×3 grid
+    for (let i = 0; i < 6; i++) {
+      const col = i % 2;
+      const row = Math.floor(i / 2);
+      const sx = 60 + col * 380;
+      const sy = 100 + row * 110;
+      const sw = 350;
+      const sh = 90;
+      const save = saves[i];
+
+      // Border
+      ctx.strokeStyle = i === this.slotIndex ? '#FFD700' : '#555';
+      ctx.lineWidth = i === this.slotIndex ? 3 : 1;
+      ctx.strokeRect(sx, sy, sw, sh);
+
+      // Selection marker
+      if (i === this.slotIndex) {
+        ctx.fillStyle = '#FFD700';
+        ctx.font = '16px Arial, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText('▶', sx + 8, sy + 24);
+      }
+
+      if (save) {
+        // Occupied slot
+        ctx.fillStyle = '#FFF';
+        ctx.font = 'bold 18px Arial, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(save.name, sx + 30, sy + 28);
+        ctx.fillStyle = '#E0E0E0';
+        ctx.font = '14px Arial, sans-serif';
+        ctx.fillText(`Stage ${save.stage}`, sx + 30, sy + 50);
+        ctx.fillText(save.date || '', sx + 30, sy + 70);
+        // Score on the right
+        ctx.fillStyle = '#FFD700';
+        ctx.textAlign = 'right';
+        ctx.fillText(`${save.totalScore || 0} 分`, sx + sw - 10, sy + 50);
+      } else {
+        // Empty slot
+        ctx.fillStyle = '#888';
+        ctx.font = '16px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('空存档', sx + sw / 2, sy + sh / 2 + 6);
+      }
+    }
+
+    // Bottom hints
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#E0E0E0';
+    ctx.font = '14px Arial, sans-serif';
+    ctx.fillText('↑↓←→ 选择  Enter 确认  Esc 返回', C.STAGE_W / 2, C.STAGE_H - 50);
+    ctx.fillText('Delete 删除存档', C.STAGE_W / 2, C.STAGE_H - 28);
+  },
+
+  updateSlotSelect() {
+    // Navigation in 2×3 grid
+    if (Input.wasPressed('ArrowUp')) {
+      this.slotIndex = (this.slotIndex - 2 + 6) % 6;
+      Audio.menuSelect();
+    }
+    if (Input.wasPressed('ArrowDown')) {
+      this.slotIndex = (this.slotIndex + 2) % 6;
+      Audio.menuSelect();
+    }
+    if (Input.wasPressed('ArrowLeft')) {
+      if (this.slotIndex % 2 !== 0) { this.slotIndex--; Audio.menuSelect(); }
+    }
+    if (Input.wasPressed('ArrowRight')) {
+      if (this.slotIndex % 2 === 0 && this.slotIndex + 1 < 6) { this.slotIndex++; Audio.menuSelect(); }
+    }
+
+    // Confirm
+    if (Input.wasPressed('Enter')) {
+      const saves = this._getSaves();
+      const save = saves[this.slotIndex];
+      if (this.slotMode === 'new') {
+        // Empty or occupied: go to name entry (pre-fill existing name)
+        this.slotNameInput = save ? save.name : '';
+        Audio.menuConfirm();
+        Engine.setState('nameEntry');
+      } else if (this.slotMode === 'load') {
+        if (save !== null) {
+          Audio.menuConfirm();
+          this.loadGame(this.slotIndex);
+        }
+      }
+    }
+
+    // Delete
+    if (Input.wasPressed('Delete') || Input.wasPressed('Backspace')) {
+      const saves = this._getSaves();
+      if (saves[this.slotIndex] !== null) {
+        this.slotConfirmDelete = this.slotIndex;
+        Audio.menuSelect();
+        Engine.setState('deleteConfirm');
+      }
+    }
+
+    // Back
+    if (Input.wasPressed('Escape')) {
+      Audio.menuSelect();
+      Engine.setState('menu');
+    }
+  },
+
+  renderNameEntry(ctx) {
+    ctx.fillStyle = C.COL_BG;
+    ctx.fillRect(0, 0, C.STAGE_W, C.STAGE_H);
+
+    ctx.fillStyle = '#FFD700';
+    ctx.font = 'bold 22px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('输入玩家名称', C.STAGE_W / 2, 200);
+
+    ctx.fillStyle = '#FFF';
+    ctx.font = '28px Arial, sans-serif';
+    ctx.fillText(this.slotNameInput + '_', C.STAGE_W / 2, 280);
+
+    ctx.fillStyle = '#E0E0E0';
+    ctx.font = '14px Arial, sans-serif';
+    ctx.fillText('按字母键输入 (最多20字符, Shift切换大小写)', C.STAGE_W / 2, 340);
+    ctx.fillText('Enter 确认  Esc 取消', C.STAGE_W / 2, 365);
+  },
+
+  updateNameEntry() {
+    const shift = Input.isDown('ShiftLeft') || Input.isDown('ShiftRight');
+    // Capture letter keys
+    for (const code of Object.keys(Input.justPressed)) {
+      if (code.startsWith('Key') && this.slotNameInput.length < 20) {
+        const ch = code.replace('Key', '');
+        this.slotNameInput += shift ? ch : ch.toLowerCase();
+      }
+    }
+    // Capture digit keys
+    for (const code of Object.keys(Input.justPressed)) {
+      if (code.startsWith('Digit') && this.slotNameInput.length < 20) {
+        const ch = code.replace('Digit', '');
+        this.slotNameInput += shift ? ')!@#$%^&*('.charAt(parseInt(ch)) : ch;
+      }
+    }
+    if (Input.wasPressed('Backspace')) {
+      this.slotNameInput = this.slotNameInput.slice(0, -1);
+    }
+    if (Input.wasPressed('Enter') && this.slotNameInput.length >= 1) {
+      Audio.menuConfirm();
+      Engine.startGame(this.slotIndex, this.slotNameInput);
+    }
+    if (Input.wasPressed('Escape')) {
+      Audio.menuSelect();
+      Engine.setState('slotSelect');
+    }
+  },
+
+  renderDeleteConfirm(ctx) {
+    // Re-render slot select behind the prompt
+    this.renderSlotSelect(ctx);
+
+    // Dark overlay
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    ctx.fillRect(0, 0, C.STAGE_W, C.STAGE_H);
+
+    // Confirmation box
+    const saves = this._getSaves();
+    const save = saves[this.slotConfirmDelete];
+    ctx.fillStyle = '#FFD700';
+    ctx.font = '18px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`确定删除 "${save ? save.name : ''}" 的存档?`, C.STAGE_W / 2, 380);
+    ctx.fillStyle = '#E0E0E0';
+    ctx.font = '14px Arial, sans-serif';
+    ctx.fillText('Enter 确认删除  Esc 取消', C.STAGE_W / 2, 420);
+  },
+
+  updateDeleteConfirm() {
+    if (Input.wasPressed('Enter')) {
+      const saves = this._getSaves();
+      saves[this.slotConfirmDelete] = null;
+      this._setSaves(saves);
+      this.hasSave = saves.some(s => s !== null);
+      this.slotConfirmDelete = -1;
+      Audio.menuConfirm();
+      Engine.setState('slotSelect');
+    }
+    if (Input.wasPressed('Escape')) {
+      this.slotConfirmDelete = -1;
+      Audio.menuSelect();
+      Engine.setState('slotSelect');
+    }
+  },
+
+  renderSkillTree(ctx) {
+    ctx.fillStyle = 'rgba(0,0,0,0.85)';
+    ctx.fillRect(0, 0, C.STAGE_W, C.STAGE_H);
+    ctx.fillStyle = '#FFD700';
+    ctx.font = '20px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('技能树', C.STAGE_W / 2, 40);
+    ctx.font = '14px Arial, sans-serif';
+    ctx.fillStyle = '#F0F0F0';
+    ctx.fillText(`可用技能点: ${Engine.skillPoints}`, C.STAGE_W / 2, 65);
+
+    const branches = [
+      { key: 'fire', name: '火力', skills: ['弹速+15%','射速+20%','穿透+1','暴击15%','散射弹'] },
+      { key: 'defense', name: '防御', skills: ['护甲+1','无敌+1s','铲子翻倍','闪避20%','复活'] },
+      { key: 'mobility', name: '机动', skills: ['速度+15%','转向+30%','弹射弹','冲刺','瞬移'] },
+    ];
+
+    for (let bi = 0; bi < branches.length; bi++) {
+      const b = branches[bi];
+      const bx = 60 + bi * 250;
+      ctx.fillStyle = '#FFF';
+      ctx.font = '16px Arial, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(b.name, bx, 100);
+      for (let si = 0; si < 5; si++) {
+        const y = 130 + si * 36;
+        const unlocked = Player.skills[b.key] > si;
+        const isNext = Player.skills[b.key] === si;
+        ctx.fillStyle = unlocked ? '#4F4' : (isNext ? '#FFD700' : '#555');
+        ctx.fillText(`${unlocked ? '●' : (isNext ? '○' : '·')} ${b.skills[si]}`, bx, y);
+      }
+    }
+
+    ctx.fillStyle = '#E0E0E0';
+    ctx.textAlign = 'center';
+    ctx.font = '14px Arial, sans-serif';
+    ctx.fillText('1/2/3 升级对应分支  Esc 返回', C.STAGE_W / 2, C.STAGE_H - 25);
+  },
+
+  updateSkillTree() {
+    const branches = ['fire', 'defense', 'mobility'];
+    const keys = ['Digit1', 'Digit2', 'Digit3'];
+    for (let i = 0; i < 3; i++) {
+      if (Input.wasPressed(keys[i])) {
+        const b = branches[i];
+        if (Engine.skillPoints > 0 && Player.skills[b] < 5) {
+          // Check max-per-branch rule: max half of total points
+          const totalSpent = Player.skills.fire + Player.skills.defense + Player.skills.mobility;
+          const maxInBranch = Math.ceil((totalSpent + 1) / 2);
+          if (Player.skills[b] < maxInBranch || totalSpent === 0) {
+            Player.skills[b]++;
+            Engine.skillPoints--;
+          }
+        }
+      }
+    }
+    if (Input.wasPressed('Escape')) {
+      Engine.setState(Engine._prevState || 'paused');
+    }
+  },
+};
+
+// ===== ENGINE =====
+const Engine = {
+  canvas: null, ctx: null,
+  state: 'menu',
+  stage: 1,
+  lastTime: 0, accumulator: 0,
+  TICK: 1000 / C.FPS,
+  // Entity management
+  enemies: [],
+  explosions: [],
+  powerUps: [],
+  // Stage state
+  enemiesLeft: 0,      // total enemies remaining to spawn
+  maxOnScreen: 4,
+  spawnTimer: 0,
+  spawnInterval: 180,  // ticks between spawns
+  freezeEnemies: 0,
+  // Scoring
+  score: 0,
+  kills: 0,
+  xp: 0,
+  skillPoints: 0,
+  // Timing
+  stageStartTime: 0,
+  stageTime: 0,
+  // Shovel timer
+  shovelTimer: 0,
+  // Screen shake
+  shakeTimer: 0,
+  shakeIntensity: 0,
+  // Previous state for skill tree navigation
+  _prevState: null,
+  // Current save slot index
+  currentSlot: -1,
+
+  init() {
+    this.canvas = document.getElementById('gameCanvas');
+    this.canvas.width = C.STAGE_W;
+    this.canvas.height = C.STAGE_H;
+    this.ctx = this.canvas.getContext('2d');
+    this.ctx.imageSmoothingEnabled = false;
+    // No CSS scaling needed — native resolution is 832x832
+    Input.init();
+    this.lastTime = performance.now();
+    requestAnimationFrame(t => this.loop(t));
+  },
+
+  loop(now) {
+    const dt = now - this.lastTime;
+    this.lastTime = now;
+    this.accumulator += Math.min(dt, 100); // cap to prevent spiral
+    while (this.accumulator >= this.TICK) {
+      this.update();
+      this.accumulator -= this.TICK;
+    }
+    this.render();
+    Input.clearFrame();
+    requestAnimationFrame(t => this.loop(t));
+  },
+
+  update() {
+    switch (this.state) {
+      case 'menu': UI.updateMenu(); Audio.resume(); break;
+      case 'playing': this.updatePlaying(); break;
+      case 'paused':
+        if (Input.wasPressed('KeyP') || Input.wasPressed('Enter')) this.setState('playing');
+        if (Input.wasPressed('Escape')) this.saveAndQuit();
+        if (Input.wasPressed('KeyT')) { this._prevState = 'paused'; this.setState('skillTree'); }
+        break;
+      case 'stageClear':
+        if (Input.wasPressed('Enter')) this.nextStage();
+        if (Input.wasPressed('KeyT')) { this._prevState = 'stageClear'; this.setState('skillTree'); }
+        if (Input.wasPressed('Escape')) this.saveAndQuit();
+        break;
+      case 'gameOver': UI.updateGameOver(); break;
+      case 'settings': UI.updateSettings(); break;
+      case 'leaderboard': UI.updateLeaderboard(); break;
+      case 'skillTree': UI.updateSkillTree(); break;
+      case 'slotSelect': UI.updateSlotSelect(); break;
+      case 'nameEntry': UI.updateNameEntry(); break;
+      case 'deleteConfirm': UI.updateDeleteConfirm(); break;
+    }
+  },
+
+  startGame(slotIndex, playerName) {
+    this.currentSlot = slotIndex;
+    this.stage = 1;
+    this.score = 0;
+    this.kills = 0;
+    this.xp = 0;
+    this.skillPoints = 0;
+    this._goSnd = false;
+    UI._goAutoSaved = false;
+    // Pre-populate slot with name so saveGame can read it
+    const saves = UI._getSaves();
+    saves[slotIndex] = {
+      name: playerName, stage: 1, lives: 3, level: 1,
+      xp: 0, skillPoints: 0, skills: { fire: 0, defense: 0, mobility: 0 },
+      totalScore: 0, kills: 0, date: new Date().toLocaleDateString(),
+    };
+    UI._setSaves(saves);
+    Player.reset();
+    this.loadStage();
+  },
+
+  loadStage() {
+    GameMap.load(this.stage - 1);
+    Player.spawn();
+    this.enemies = [];
+    this.explosions = [];
+    this.powerUps = [];
+    this.freezeEnemies = 0;
+    this.shovelTimer = 0;
+    Particles.clear();
+    this.shakeTimer = 0;
+    this.shakeIntensity = 0;
+    // Difficulty params
+    this.enemiesLeft = 10 + Math.floor(this.stage * 1.5);
+    this.maxOnScreen = Math.min(4 + Math.floor(this.stage / 4), 8);
+    this.spawnInterval = Math.max(90, Math.floor(240 - this.stage * 6));
+    this.spawnTimer = 60;
+    this.stageStartTime = Date.now();
+    this.stageTime = 0;
+    Audio.startBGM();
+    this.setState('playing');
+  },
+
+  updatePlaying() {
+    if (Input.wasPressed('KeyP')) {
+      this.setState('paused');
+      return;
+    }
+
+    // Update timer
+    this.stageTime = Date.now() - this.stageStartTime;
+
+    // Freeze countdown
+    if (this.freezeEnemies > 0) this.freezeEnemies--;
+
+    // Spawn enemies
+    this.updateSpawning();
+
+    // Update player
+    Player.update();
+
+    // Update enemies
+    for (const e of this.enemies) {
+      if (e.alive) {
+        if (this.freezeEnemies <= 0) e.update();
+        e.renderAnim(); // animate even when frozen
+      }
+    }
+
+    // Bullet-enemy collision (player bullets vs enemies)
+    for (const b of Player.bullets) {
+      if (!b.alive) continue;
+      for (const e of this.enemies) {
+        if (!e.alive) continue;
+        if (rectOverlap(b.getRect(), e.getRect())) {
+          b.alive = false;
+          e.hp--;
+          if (e.hp <= 0) {
+            e.alive = false;
+            this.explosions.push(new Explosion(e.x + e.size/2, e.y + e.size/2, e.isBoss ? 'large' : 'medium'));
+            Particles.emit(e.x + e.size/2, e.y + e.size/2, 8, '#FF4400', 2, 20);
+            this.addScore(e.typeDef.hp * 50);
+            this.kills++;
+            this.addXP(e.xpValue);
+            speak('great');
+            // Drop power-up if special enemy
+            if (e.dropsPowerUp) {
+              this.spawnPowerUp(e.x, e.y);
+            }
+          }
+          this.explosions.push(new Explosion(b.x + b.w/2, b.y + b.h/2, 'small'));
+          break;
+        }
+      }
+    }
+
+    // Bullet-player collision (enemy bullets vs player)
+    for (const e of this.enemies) {
+      for (const b of e.bullets) {
+        if (!b.alive) continue;
+        if (Player.alive && rectOverlap(b.getRect(), Player.getRect())) {
+          b.alive = false;
+          Player.hit();
+          this.explosions.push(new Explosion(b.x + b.w/2, b.y + b.h/2, 'small'));
+        }
+      }
+    }
+
+    // Player bullet vs enemy bullet collision
+    for (const pb of Player.bullets) {
+      if (!pb.alive) continue;
+      for (const e of this.enemies) {
+        for (const eb of e.bullets) {
+          if (!eb.alive) continue;
+          if (rectOverlap(pb.getRect(), eb.getRect())) {
+            pb.alive = false;
+            eb.alive = false;
+          }
+        }
+      }
+    }
+
+    // Power-up collection
+    if (Player.alive) {
+      for (const pu of this.powerUps) {
+        if (!pu.alive) continue;
+        if (rectOverlap(Player.getRect(), pu.getRect())) {
+          pu.alive = false;
+          Player.applyPowerUp(pu.type);
+        }
+      }
+    }
+
+    // Update explosions
+    for (const ex of this.explosions) ex.update();
+    this.explosions = this.explosions.filter(e => e.alive);
+
+    // Update power-ups
+    for (const pu of this.powerUps) pu.update();
+    this.powerUps = this.powerUps.filter(p => p.alive);
+
+    // Clean up dead enemies and their bullets
+    this.enemies = this.enemies.filter(e => {
+      if (!e.alive) return false;
+      e.bullets = e.bullets.filter(b => b.alive);
+      return true;
+    });
+
+    // Update particles and screen shake
+    Particles.update();
+    if (this.shakeTimer > 0) this.shakeTimer--;
+
+    // Check stage clear
+    if (this.enemiesLeft <= 0 && this.enemies.length === 0) {
+      this.onStageClear();
+    }
+  },
+
+  updateSpawning() {
+    if (this.enemiesLeft <= 0) return;
+    if (this.enemies.filter(e => e.alive).length >= this.maxOnScreen) return;
+    this.spawnTimer--;
+    if (this.spawnTimer <= 0) {
+      this.spawnTimer = this.spawnInterval;
+      this.spawnEnemy();
+    }
+  },
+
+  spawnEnemy() {
+    const spawnCols = [1, 12, 23];
+    const col = spawnCols[this.enemies.length % 3];
+
+    // Boss every 5 stages
+    if (this.stage % 5 === 0 && this.enemiesLeft === 10 + Math.floor(this.stage * 1.5)) {
+      const boss = new BossTank(tileToPixel(10), 0, this.stage);
+      this.enemies.push(boss);
+      this.enemiesLeft--;
+      return;
+    }
+
+    const type = this.pickEnemyType();
+    const enemy = new EnemyTank(tileToPixel(col), 0, type, this.stage);
+    if (GameMap.collides(enemy.x, enemy.y, enemy.size, enemy.size) ||
+        this.enemies.some(e => e.alive && rectOverlap(enemy.getRect(), e.getRect())) ||
+        (Player.alive && rectOverlap(enemy.getRect(), Player.getRect()))) {
+      return;
+    }
+    this.enemies.push(enemy);
+    this.enemiesLeft--;
+  },
+
+  pickEnemyType() {
+    const available = Object.entries(C.E_TYPES).filter(([k,v]) => this.stage >= v.minStage);
+    if (available.length === 0) return C.E_TYPES.basic;
+    // Weight towards weaker enemies, with some randomness
+    const weights = available.map(([k, v]) => {
+      const diff = this.stage - v.minStage;
+      return Math.max(1, 10 - diff * 2);
+    });
+    const total = weights.reduce((a,b) => a + b, 0);
+    let r = Math.random() * total;
+    for (let i = 0; i < available.length; i++) {
+      r -= weights[i];
+      if (r <= 0) return available[i][1];
+    }
+    return available[0][1];
+  },
+
+  spawnPowerUp(x, y) {
+    const type = randInt(0, 9);
+    const puX = clamp(x, 0, C.STAGE_W - C.POWERUP_SIZE);
+    const puY = clamp(y, 0, C.STAGE_H - C.POWERUP_SIZE);
+    // Make sure it's on empty ground
+    if (!GameMap.collides(puX, puY, C.POWERUP_SIZE, C.POWERUP_SIZE)) {
+      this.powerUps.push(new PowerUp(puX, puY, type));
+    }
+  },
+
+  addScore(pts) { this.score += pts; },
+  addXP(xp) {
+    this.xp += xp;
+    const needed = 100 * (this.skillPoints + 1);
+    if (this.xp >= needed) {
+      this.xp -= needed;
+      this.skillPoints++;
+    }
+  },
+
+  onBaseDestroyed() {
+    this.explosions.push(new Explosion(C.STAGE_W / 2, C.STAGE_H - C.TILE, 'large'));
+    this.shake(8, 30);
+    Particles.emit(C.STAGE_W / 2, C.STAGE_H - C.TILE, 20, '#FF0000', 3, 40);
+    speak('baseDestroyed');
+    this.setState('gameOver');
+  },
+
+  onPlayerDead() {
+    this.setState('gameOver');
+  },
+
+  onStageClear() {
+    Audio.levelUp();
+    speak('stageClear');
+    this.stage++;  // Advance stage number so save reflects next stage to play
+    UI.saveGame();
+    this.setState('stageClear');
+  },
+
+  nextStage() {
+    // Stage was already incremented in onStageClear
+    if (this.stage > MAPS.length) {
+      this.setState('gameOver'); // all stages beaten
+    } else {
+      this.loadStage();
+    }
+  },
+
+  saveAndQuit() {
+    UI.saveGame();
+    this.setState('menu');
+  },
+
+  setState(s) {
+    if (s === 'menu') Audio.stopBGM();
+    if (s === 'paused') Audio.stopBGM();
+    if (s === 'playing' && this.state === 'paused') Audio.startBGM();
+    this.state = s;
+  },
+
+  shake(intensity, duration) {
+    this.shakeIntensity = intensity;
+    this.shakeTimer = duration;
+  },
+
+  render() {
+    const ctx = this.ctx;
+    ctx.fillStyle = C.COL_BG;
+    ctx.fillRect(0, 0, C.STAGE_W, C.STAGE_H);
+
+    switch (this.state) {
+      case 'menu': UI.renderMenu(ctx); break;
+      case 'playing':
+      case 'paused':
+        this.renderGame(ctx);
+        if (this.state === 'paused') this.renderPauseOverlay(ctx);
+        break;
+      case 'stageClear':
+        this.renderGame(ctx);
+        this.renderStageClearOverlay(ctx);
+        break;
+      case 'gameOver':
+        this.renderGame(ctx);
+        UI.renderGameOver(ctx);
+        break;
+      case 'settings': UI.renderSettings(ctx); break;
+      case 'leaderboard': UI.renderLeaderboard(ctx); break;
+      case 'skillTree': UI.renderSkillTree(ctx); break;
+      case 'slotSelect': UI.renderSlotSelect(ctx); break;
+      case 'nameEntry': UI.renderNameEntry(ctx); break;
+      case 'deleteConfirm': UI.renderDeleteConfirm(ctx); break;
+    }
+  },
+
+  renderMenu(ctx) {
+    // Delegated to UI.renderMenu
+  },
+
+  renderGame(ctx) {
+    let ox = 0, oy = 0;
+    if (this.shakeTimer > 0) {
+      ox = (Math.random() - 0.5) * this.shakeIntensity;
+      oy = (Math.random() - 0.5) * this.shakeIntensity;
+    }
+    ctx.save();
+    ctx.translate(ox, oy);
+    GameMap.render(ctx);
+    // Power-ups
+    for (const pu of this.powerUps) pu.render(ctx);
+    // Enemies
+    for (const e of this.enemies) if (e.alive) e.render(ctx);
+    // Player
+    Player.render(ctx);
+    // Trees (above tanks)
+    GameMap.renderTrees(ctx);
+    // Explosions
+    for (const ex of this.explosions) ex.render(ctx);
+    // Particles
+    Particles.render(ctx);
+    ctx.restore();
+    HUD.render(ctx);
+  },
+
+  renderPauseOverlay(ctx) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(0, 0, C.STAGE_W, C.STAGE_H);
+    ctx.fillStyle = '#FFF';
+    ctx.font = '24px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('暂 停', C.STAGE_W / 2, C.STAGE_H / 2 - 60);
+    ctx.font = '16px Arial, sans-serif';
+    ctx.fillStyle = '#FFD700';
+    ctx.fillText('按 P 或 Enter 继续游戏', C.STAGE_W / 2, C.STAGE_H / 2 - 20);
+    if (Engine.skillPoints > 0) {
+      ctx.fillStyle = '#FFD700';
+      ctx.fillText(`有 ${Engine.skillPoints} 个技能点可用! 按 T 打开技能树`, C.STAGE_W / 2, C.STAGE_H / 2 + 20);
+    }
+    ctx.fillStyle = '#E0E0E0';
+    ctx.fillText('按 Esc 保存并返回主菜单', C.STAGE_W / 2, C.STAGE_H / 2 + 60);
+  },
+
+  renderStageClearOverlay(ctx) {
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(0, 0, C.STAGE_W, C.STAGE_H);
+    ctx.fillStyle = '#FFD700';
+    ctx.font = '24px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`第 ${this.stage - 1} 关 通过!`, C.STAGE_W / 2, C.STAGE_H / 2 - 36);
+    ctx.fillStyle = '#FFF';
+    ctx.font = '16px Arial, sans-serif';
+    const timeSec = Math.floor(this.stageTime / 1000);
+    ctx.fillText(`击杀: ${this.kills}  用时: ${timeSec}s  得分: ${this.score}`, C.STAGE_W / 2, C.STAGE_H / 2 + 10);
+    if (Engine.skillPoints > 0) {
+      ctx.fillStyle = '#FFD700';
+      ctx.fillText(`有 ${Engine.skillPoints} 个技能点可用! 按 T 打开技能树`, C.STAGE_W / 2, C.STAGE_H / 2 + 50);
+    }
+    ctx.fillStyle = '#F0F0F0';
+    ctx.fillText('按 Enter 进入下一关', C.STAGE_W / 2, C.STAGE_H / 2 + 90);
+    ctx.fillText('按 Esc 保存并返回主菜单', C.STAGE_W / 2, C.STAGE_H / 2 + 120);
+  },
+
+  renderGameOver(ctx) {
+    if (!this._goSnd) {
+      Audio.gameOver();
+      this._goSnd = true;
+      // Auto-save leaderboard record if we have a save slot
+      if (this.currentSlot >= 0) {
+        const saves = UI._getSaves();
+        const save = saves[this.currentSlot];
+        if (save) {
+          UI.addRecord(save.name, this.score, this.stage, this.kills);
+          UI._goAutoSaved = true;
+        }
+      }
+      if (!UI._goAutoSaved) UI._goAutoSaved = false;
+    }
+    // Delegated to UI.renderGameOver
+  },
+};
+
+// ===== BOOT =====
+document.addEventListener('DOMContentLoaded', () => {
+  Sprites.init();
+  Audio.init();
+  UI.init();
+  Engine.init();
+});
+</script>
+</body>
+</html>
