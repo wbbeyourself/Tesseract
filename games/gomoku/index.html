@@ -724,7 +724,7 @@ body { background: #1a1a2e; color: #ddd; font-family: "Microsoft YaHei", "PingFa
 <div class="main-area">
   <div class="player-panel" id="panel-left">
     <div class="turn-tag waiting" id="turn-left">等待</div>
-    <div class="panel-piece black"></div>
+    <div class="panel-piece {{LEFT_PIECE}}"></div>
     <div class="panel-name" id="name-left">{{LEFT_NAME}}</div>
     <div class="panel-role">{{LEFT_ROLE}}</div>
     <div class="panel-stat">落子：<span id="moves-left">0</span></div>
@@ -732,7 +732,7 @@ body { background: #1a1a2e; color: #ddd; font-family: "Microsoft YaHei", "PingFa
   <div id="board-wrapper"><canvas id="board-canvas"></canvas></div>
   <div class="player-panel" id="panel-right">
     <div class="turn-tag waiting" id="turn-right">等待</div>
-    <div class="panel-piece white"></div>
+    <div class="panel-piece {{RIGHT_PIECE}}"></div>
     <div class="panel-name" id="name-right">{{RIGHT_NAME}}</div>
     <div class="panel-role">{{RIGHT_ROLE}}</div>
     <div class="panel-stat">落子：<span id="moves-right">0</span></div>
@@ -2605,6 +2605,10 @@ class GameController {
       resultClass = 'ongoing';
     }
 
+    // 左右面板棋子颜色：player 1=黑, 2=白
+    const leftPiece = this.panelPlayerNum[0] === 1 ? 'black' : 'white';
+    const rightPiece = this.panelPlayerNum[1] === 1 ? 'black' : 'white';
+
     let minR = boardSize, maxR = 0, minC = boardSize, maxC = 0;
     if (moves.length > 0) {
       for (const [r, c] of moves) {
@@ -2628,6 +2632,8 @@ class GameController {
       .replaceAll('{{RIGHT_NAME}}', rightName)
       .replaceAll('{{LEFT_ROLE}}', leftRole)
       .replaceAll('{{RIGHT_ROLE}}', rightRole)
+      .replaceAll('{{LEFT_PIECE}}', leftPiece)
+      .replaceAll('{{RIGHT_PIECE}}', rightPiece)
       .replaceAll('{{RESULT_HTML}}', resultHtml)
       .replaceAll('{{TOTAL_MOVES}}', totalMoves)
       .replaceAll('{{MOVES}}', JSON.stringify(moves))
