@@ -248,7 +248,74 @@ body {
 .action-btn.undo { background: #e8c99b; color: #333; }
 .action-btn.restart { background: #4a6fa5; color: #fff; }
 .action-btn.replay { background: #4a4a4a; color: #aaa; }
+.action-btn.export { background: #2e7d32; color: #fff; }
+.action-btn.export:hover { background: #388e3c; }
+.action-btn.pause { background: #6a5acd; color: #fff; }
+.action-btn.pause.active { background: #2ecc71; }
 .action-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ===== 暂停遮罩 ===== */
+.pause-overlay {
+  display: none;
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.7);
+  z-index: 90;
+  justify-content: center;
+  align-items: center;
+}
+.pause-overlay.show {
+  display: flex;
+}
+.pause-box {
+  background: #2d2d2d;
+  border-radius: 16px;
+  padding: 32px 48px;
+  text-align: center;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5), 0 0 60px rgba(106,90,205,0.2);
+  border: 2px solid #6a5acd;
+  animation: pauseFadeIn 0.3s ease-out;
+}
+@keyframes pauseFadeIn {
+  0% { transform: scale(0.8); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+.pause-icon {
+  font-size: 56px;
+  margin-bottom: 8px;
+  animation: pausePulse 2s ease-in-out infinite;
+}
+@keyframes pausePulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.1); opacity: 0.7; }
+}
+.pause-title {
+  font-size: 22px;
+  font-weight: bold;
+  color: #e8c99b;
+  margin-bottom: 8px;
+}
+.pause-countdown {
+  font-size: 14px;
+  color: #999;
+  margin-bottom: 16px;
+  min-height: 20px;
+}
+.pause-resume-btn {
+  padding: 10px 28px;
+  border-radius: 8px;
+  border: none;
+  font-size: 14px;
+  cursor: pointer;
+  font-weight: bold;
+  background: #6a5acd;
+  color: #fff;
+  transition: all 0.2s;
+}
+.pause-resume-btn:hover {
+  background: #7b68ee;
+  transform: scale(1.05);
+}
 
 /* ===== 弹窗 ===== */
 .modal-overlay {
@@ -491,8 +558,20 @@ body {
     <button class="ctrl-btn diff" onclick="game.zoomOut()">－</button>
     <button class="ctrl-btn diff" onclick="game.zoomFit()">⊙ 适配</button>
   </div>
+  <button class="action-btn pause" id="btn-pause" onclick="game.togglePause()" disabled>⏸ 暂停</button>
   <button class="action-btn restart" onclick="game.restart()">🔄 新局</button>
   <button class="action-btn replay" id="btn-replay" onclick="game.startReplay()">▶ 回放</button>
+  <button class="action-btn export" id="btn-export" onclick="game.exportGame()" disabled>📤 导出对局</button>
+</div>
+
+<!-- 暂停遮罩 -->
+<div class="pause-overlay" id="pause-overlay">
+  <div class="pause-box">
+    <div class="pause-icon">⏸️</div>
+    <div class="pause-title">游戏已暂停</div>
+    <div class="pause-countdown" id="pause-countdown"></div>
+    <button class="btn-primary pause-resume-btn" onclick="game.togglePause()">▶ 继续游戏</button>
+  </div>
 </div>
 
 <!-- 回放控制 -->
@@ -566,6 +645,360 @@ body {
 
 <!-- 撒花特效画布 -->
 <canvas id="confetti-canvas"></canvas>
+
+<!-- 导出对局弹窗 -->
+<div class="modal-overlay" id="modal-export">
+  <div class="modal-box" style="min-width:380px;">
+    <h2>📤 导出对局</h2>
+    <div style="font-size:13px;color:#999;margin-bottom:10px;">将本局对弈导出为独立 HTML 文件，方便回看和分享。</div>
+    <div style="font-size:13px;color:#ccc;margin-bottom:6px;">文件名：</div>
+    <input type="text" id="input-export-filename" placeholder="五子棋对局" maxlength="50" style="width:100%;padding:8px 12px;border-radius:6px;border:1px solid #555;background:#2d2d2d;color:#ddd;font-size:14px;margin-bottom:10px;outline:none;">
+    <div style="font-size:11px;color:#666;margin-bottom:16px;">文件将保存为 .html 格式，可在任意浏览器中打开查看</div>
+    <div class="btn-row">
+      <button class="btn-secondary" onclick="document.getElementById('modal-export').classList.remove('show')">取消</button>
+      <button class="btn-primary" onclick="game.doExport()">导出</button>
+    </div>
+  </div>
+</div>
+
+<!-- 导出对局 HTML 模板 -->
+<script type="text/template" id="export-tmpl">
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{TITLE}}</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #ddd; font-family: "Microsoft YaHei", "PingFang SC", sans-serif; display: flex; flex-direction: column; align-items: center; min-height: 100vh; padding: 16px; }
+.game-title { font-size: 22px; font-weight: bold; color: #e8c99b; margin: 12px 0 4px; text-shadow: 0 0 20px rgba(232,201,155,0.4); }
+.game-info { font-size: 12px; color: #888; margin-bottom: 12px; }
+.result-badge { display: inline-block; padding: 3px 12px; border-radius: 10px; font-size: 12px; font-weight: bold; margin-left: 8px; }
+.result-badge.win { background: #4caf50; color: #fff; }
+.result-badge.draw { background: #ff9800; color: #fff; }
+.result-badge.ongoing { background: #6a5acd; color: #fff; }
+.main-area { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; justify-content: center; }
+.player-panel { background: #2d2d3d; border-radius: 10px; padding: 16px 14px; width: 130px; text-align: center; border: 1px solid #3d3d4d; }
+.player-panel.active { border-color: #e8c99b; box-shadow: 0 0 16px rgba(232,201,155,0.2); }
+.panel-piece { width: 32px; height: 32px; border-radius: 50%; margin: 8px auto; }
+.panel-piece.black { background: radial-gradient(circle at 35% 35%, #666, #111); }
+.panel-piece.white { background: radial-gradient(circle at 35% 35%, #fff, #bbb); border: 1px solid #999; }
+.panel-name { font-size: 14px; font-weight: bold; color: #e8c99b; margin: 4px 0 2px; }
+.panel-role { font-size: 11px; color: #888; margin-bottom: 8px; }
+.panel-stat { font-size: 11px; color: #aaa; line-height: 1.8; }
+.turn-tag { display: inline-block; padding: 2px 10px; border-radius: 8px; font-size: 11px; font-weight: bold; margin-bottom: 6px; }
+.turn-tag.active { background: #e8c99b; color: #333; }
+.turn-tag.waiting { background: #3d3d4d; color: #777; }
+#board-wrapper { background: linear-gradient(135deg, #d4a574, #b8956a); padding: 6px; border-radius: 4px; }
+#board-canvas { display: block; }
+.controls { margin-top: 14px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; }
+.ctrl-btn { padding: 8px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 13px; font-weight: bold; transition: all 0.2s; }
+.ctrl-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.ctrl-btn.primary { background: #e8c99b; color: #333; }
+.ctrl-btn.primary:hover:not(:disabled) { background: #f0d9a8; }
+.ctrl-btn.secondary { background: #4a4a5a; color: #aaa; }
+.ctrl-btn.secondary:hover:not(:disabled) { background: #5a5a6a; }
+.ctrl-btn.green { background: #2e7d32; color: #fff; }
+.ctrl-btn.green:hover:not(:disabled) { background: #388e3c; }
+.step-info { font-size: 13px; color: #aaa; min-width: 90px; text-align: center; }
+.speed-group { display: flex; align-items: center; gap: 4px; }
+.speed-group label { font-size: 11px; color: #888; }
+.speed-group select { padding: 4px 8px; border-radius: 4px; border: 1px solid #555; background: #2d2d3d; color: #ddd; font-size: 12px; }
+.move-list-toggle { margin-top: 10px; }
+.move-list-toggle button { background: #3d3d4d; color: #aaa; border: none; padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; }
+.move-list-toggle button:hover { background: #4d4d5d; }
+#move-list { display: none; margin-top: 10px; background: #2d2d3d; border-radius: 8px; padding: 12px 16px; max-width: 700px; width: 100%; max-height: 200px; overflow-y: auto; }
+#move-list table { width: 100%; border-collapse: collapse; font-size: 12px; }
+#move-list th { color: #e8c99b; text-align: left; padding: 4px 8px; border-bottom: 1px solid #3d3d4d; }
+#move-list td { padding: 3px 8px; color: #aaa; cursor: pointer; }
+#move-list td:hover { color: #e8c99b; }
+#move-list tr.highlight td { color: #e8c99b; font-weight: bold; background: rgba(232,201,155,0.1); }
+.keyboard-hint { margin-top: 10px; font-size: 11px; color: #555; text-align: center; }
+.keyboard-hint kbd { background: #3d3d4d; padding: 1px 5px; border-radius: 3px; font-family: monospace; }
+</style>
+</head>
+<body>
+<div class="game-title">&#9823; 五子棋对局回放</div>
+<div class="game-info">{{DATE}} &middot; {{LEFT_NAME}} vs {{RIGHT_NAME}} {{RESULT_HTML}}</div>
+<div class="main-area">
+  <div class="player-panel" id="panel-left">
+    <div class="turn-tag waiting" id="turn-left">等待</div>
+    <div class="panel-piece black"></div>
+    <div class="panel-name" id="name-left">{{LEFT_NAME}}</div>
+    <div class="panel-role">{{LEFT_ROLE}}</div>
+    <div class="panel-stat">落子：<span id="moves-left">0</span></div>
+  </div>
+  <div id="board-wrapper"><canvas id="board-canvas"></canvas></div>
+  <div class="player-panel" id="panel-right">
+    <div class="turn-tag waiting" id="turn-right">等待</div>
+    <div class="panel-piece white"></div>
+    <div class="panel-name" id="name-right">{{RIGHT_NAME}}</div>
+    <div class="panel-role">{{RIGHT_ROLE}}</div>
+    <div class="panel-stat">落子：<span id="moves-right">0</span></div>
+  </div>
+</div>
+<div class="controls">
+  <button class="ctrl-btn secondary" id="btn-first" onclick="goFirst()">&#9198; 首步</button>
+  <button class="ctrl-btn secondary" id="btn-prev" onclick="goPrev()">&#9664; 上一步</button>
+  <button class="ctrl-btn green" id="btn-play" onclick="togglePlay()">&#9654; 自动播放</button>
+  <button class="ctrl-btn secondary" id="btn-next" onclick="goNext()">下一步 &#9654;</button>
+  <button class="ctrl-btn secondary" id="btn-last" onclick="goLast()">末步 &#9197;</button>
+  <span class="step-info" id="step-info">第 0 / {{TOTAL_MOVES}} 步</span>
+  <div class="speed-group"><label>速度：</label><select id="speed-select" onchange="changeSpeed()">
+    <option value="1200">慢速</option>
+    <option value="800" selected>正常</option>
+    <option value="400">快速</option>
+    <option value="200">极速</option>
+  </select></div>
+</div>
+<div class="move-list-toggle"><button onclick="toggleMoveList()">&#128203; 棋谱列表</button></div>
+<div id="move-list"><table><thead><tr><th>步数</th><th>黑方 (左)</th><th>白方 (右)</th></tr></thead><tbody id="move-list-body"></tbody></table></div>
+<div class="keyboard-hint">快捷键：<kbd>&larr;</kbd> 上一步 &nbsp; <kbd>&rarr;</kbd> 下一步 &nbsp; <kbd>空格</kbd> 自动播放 &nbsp; <kbd>Home</kbd> 首步 &nbsp; <kbd>End</kbd> 末步</div>
+<script>
+var MOVES = {{MOVES}};
+var BOARD_SIZE = {{BOARD_SIZE}};
+var VIEW_CENTER_ROW = {{CENTER_ROW}};
+var VIEW_CENTER_COL = {{CENTER_COL}};
+var VIEW_CELLS = {{VIEW_CELLS}};
+var TOTAL_MOVES = {{TOTAL_MOVES}};
+
+var canvas, ctx, cellSize, canvasSize;
+var currentIndex = -1;
+var autoPlayTimer = null;
+var autoSpeed = 800;
+
+function init() {
+  canvas = document.getElementById('board-canvas');
+  ctx = canvas.getContext('2d');
+  resize();
+  draw();
+  buildMoveList();
+  updateUI();
+  window.addEventListener('resize', function() { resize(); draw(); });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'ArrowLeft') { e.preventDefault(); goPrev(); }
+    else if (e.key === 'ArrowRight') { e.preventDefault(); goNext(); }
+    else if (e.key === ' ') { e.preventDefault(); togglePlay(); }
+    else if (e.key === 'Home') { e.preventDefault(); goFirst(); }
+    else if (e.key === 'End') { e.preventDefault(); goLast(); }
+  });
+}
+
+function resize() {
+  var maxH = window.innerHeight * 0.62;
+  var maxW = window.innerWidth - 340;
+  canvasSize = Math.min(maxH, maxW, 700);
+  canvasSize = Math.max(canvasSize, 300);
+  canvas.width = canvasSize;
+  canvas.height = canvasSize;
+  canvas.style.width = canvasSize + 'px';
+  canvas.style.height = canvasSize + 'px';
+  cellSize = canvasSize / (VIEW_CELLS + 1);
+}
+
+function gridToPixel(row, col) {
+  var halfCanvas = canvasSize / 2;
+  return {
+    x: halfCanvas + (col - VIEW_CENTER_COL) * cellSize,
+    y: halfCanvas + (row - VIEW_CENTER_ROW) * cellSize
+  };
+}
+
+function draw() {
+  drawBoard();
+  drawPieces();
+  drawMoveNumbers();
+  drawLastMark();
+}
+
+function drawBoard() {
+  var grad = ctx.createLinearGradient(0, 0, canvasSize, canvasSize);
+  grad.addColorStop(0, '#d4a574');
+  grad.addColorStop(0.3, '#c8a068');
+  grad.addColorStop(0.6, '#d4a574');
+  grad.addColorStop(1, '#b8956a');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, canvasSize, canvasSize);
+  ctx.strokeStyle = 'rgba(139,90,43,0.08)';
+  ctx.lineWidth = 1;
+  for (var i = 0; i < canvasSize; i += 3) {
+    ctx.beginPath();
+    ctx.moveTo(0, i + Math.sin(i * 0.05) * 2);
+    ctx.lineTo(canvasSize, i + Math.cos(i * 0.03) * 2);
+    ctx.stroke();
+  }
+  var halfCells = Math.ceil(VIEW_CELLS / 2) + 1;
+  var minR = Math.max(0, Math.floor(VIEW_CENTER_ROW - halfCells));
+  var maxR = Math.min(BOARD_SIZE - 1, Math.ceil(VIEW_CENTER_ROW + halfCells));
+  var minC = Math.max(0, Math.floor(VIEW_CENTER_COL - halfCells));
+  var maxC = Math.min(BOARD_SIZE - 1, Math.ceil(VIEW_CENTER_COL + halfCells));
+  ctx.strokeStyle = 'rgba(80,50,20,0.5)';
+  ctx.lineWidth = 0.5;
+  for (var r = minR; r <= maxR; r++) {
+    for (var c = minC; c <= maxC; c++) {
+      var p = gridToPixel(r, c);
+      if (c < BOARD_SIZE - 1) {
+        var pr = gridToPixel(r, c + 1);
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(pr.x, pr.y); ctx.stroke();
+      }
+      if (r < BOARD_SIZE - 1) {
+        var pd = gridToPixel(r + 1, c);
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(pd.x, pd.y); ctx.stroke();
+      }
+    }
+  }
+  var mid = Math.floor(BOARD_SIZE / 2);
+  var mp = gridToPixel(mid, mid);
+  ctx.fillStyle = 'rgba(80,50,20,0.6)';
+  ctx.beginPath();
+  ctx.arc(mp.x, mp.y, Math.max(3, cellSize * 0.15), 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawPieces() {
+  if (currentIndex < 0) return;
+  var radius = cellSize * 0.42;
+  for (var i = 0; i <= currentIndex; i++) {
+    var m = MOVES[i];
+    var pos = gridToPixel(m[0], m[1]);
+    drawPieceAt(pos.x, pos.y, m[2], radius);
+  }
+}
+
+function drawPieceAt(x, y, player, radius) {
+  var grad;
+  if (player === 1) {
+    grad = ctx.createRadialGradient(x - radius*0.3, y - radius*0.3, radius*0.1, x, y, radius);
+    grad.addColorStop(0, '#666'); grad.addColorStop(1, '#111');
+  } else {
+    grad = ctx.createRadialGradient(x - radius*0.3, y - radius*0.3, radius*0.1, x, y, radius);
+    grad.addColorStop(0, '#fff'); grad.addColorStop(1, '#bbb');
+  }
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, Math.PI * 2);
+  ctx.fill();
+  if (player === 2) { ctx.strokeStyle = 'rgba(150,150,150,0.5)'; ctx.lineWidth = 0.5; ctx.stroke(); }
+}
+
+function drawMoveNumbers() {
+  if (currentIndex < 0) return;
+  ctx.font = 'bold ' + Math.max(9, cellSize * 0.3) + 'px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (var i = 0; i <= currentIndex; i++) {
+    var m = MOVES[i];
+    var pos = gridToPixel(m[0], m[1]);
+    ctx.fillStyle = m[2] === 1 ? '#ccc' : '#333';
+    ctx.fillText(String(i + 1), pos.x, pos.y + 0.5);
+  }
+}
+
+function drawLastMark() {
+  if (currentIndex < 0) return;
+  var m = MOVES[currentIndex];
+  var pos = gridToPixel(m[0], m[1]);
+  ctx.fillStyle = '#e74c3c';
+  ctx.beginPath();
+  ctx.arc(pos.x, pos.y, Math.max(2, cellSize * 0.12), 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function goFirst() { currentIndex = -1; stopAutoPlay(); draw(); updateUI(); }
+function goLast() { currentIndex = TOTAL_MOVES - 1; stopAutoPlay(); draw(); updateUI(); }
+function goPrev() { if (currentIndex >= 0) { currentIndex--; stopAutoPlay(); draw(); updateUI(); } }
+function goNext() { if (currentIndex < TOTAL_MOVES - 1) { currentIndex++; stopAutoPlay(); draw(); updateUI(); } if (currentIndex >= TOTAL_MOVES - 1) stopAutoPlay(); }
+
+function togglePlay() {
+  if (autoPlayTimer) { stopAutoPlay(); }
+  else {
+    if (currentIndex >= TOTAL_MOVES - 1) currentIndex = -1;
+    autoPlayTimer = setInterval(function() {
+      currentIndex++;
+      draw(); updateUI();
+      if (currentIndex >= TOTAL_MOVES - 1) stopAutoPlay();
+    }, autoSpeed);
+    updatePlayBtn();
+  }
+}
+
+function stopAutoPlay() {
+  if (autoPlayTimer) { clearInterval(autoPlayTimer); autoPlayTimer = null; }
+  updatePlayBtn();
+}
+
+function updatePlayBtn() {
+  var btn = document.getElementById('btn-play');
+  if (autoPlayTimer) { btn.textContent = '⏸ 暂停'; btn.className = 'ctrl-btn primary'; }
+  else { btn.textContent = '▶ 自动播放'; btn.className = 'ctrl-btn green'; }
+}
+
+function changeSpeed() {
+  autoSpeed = parseInt(document.getElementById('speed-select').value);
+  if (autoPlayTimer) { stopAutoPlay(); togglePlay(); }
+}
+
+function updateUI() {
+  document.getElementById('step-info').textContent = '第 ' + (currentIndex + 1) + ' / ' + TOTAL_MOVES + ' 步';
+  var bCount = 0, wCount = 0;
+  for (var i = 0; i <= currentIndex; i++) {
+    if (MOVES[i][2] === 1) bCount++; else wCount++;
+  }
+  document.getElementById('moves-left').textContent = bCount;
+  document.getElementById('moves-right').textContent = wCount;
+  if (currentIndex < 0) {
+    document.getElementById('turn-left').textContent = '等待';
+    document.getElementById('turn-left').className = 'turn-tag waiting';
+    document.getElementById('turn-right').textContent = '等待';
+    document.getElementById('turn-right').className = 'turn-tag waiting';
+    document.getElementById('panel-left').className = 'player-panel';
+    document.getElementById('panel-right').className = 'player-panel';
+  } else {
+    var lastPlayer = MOVES[currentIndex][2];
+    var nextPlayer = 3 - lastPlayer;
+    var lastIsLeft = (lastPlayer === 1);
+    document.getElementById('turn-left').textContent = lastIsLeft ? '✓ 已落子' : '⬤ 轮到你了';
+    document.getElementById('turn-left').className = 'turn-tag ' + (lastIsLeft ? 'waiting' : 'active');
+    document.getElementById('turn-right').textContent = lastIsLeft ? '⬤ 轮到你了' : '✓ 已落子';
+    document.getElementById('turn-right').className = 'turn-tag ' + (lastIsLeft ? 'active' : 'waiting');
+    document.getElementById('panel-left').className = 'player-panel' + (nextPlayer === 1 ? ' active' : '');
+    document.getElementById('panel-right').className = 'player-panel' + (nextPlayer === 2 ? ' active' : '');
+  }
+  var rows = document.querySelectorAll('#move-list-body tr');
+  for (var i = 0; i < rows.length; i++) {
+    rows[i].className = (i === currentIndex) ? 'highlight' : '';
+  }
+}
+
+function buildMoveList() {
+  var tbody = document.getElementById('move-list-body');
+  var html = '';
+  for (var i = 0; i < TOTAL_MOVES; i++) {
+    var m = MOVES[i];
+    var coord = String.fromCharCode(65 + m[0]) + (Math.floor(m[1] / 4) + 1);
+    var who = m[2] === 1 ? '●' : '○';
+    var cell = who + ' ' + coord;
+    html += '<tr onclick="goToStep(' + i + ')"><td>' + (i+1) + '</td>';
+    if (m[2] === 1) html += '<td>' + cell + '</td><td></td>';
+    else html += '<td></td><td>' + cell + '</td>';
+    html += '</tr>';
+  }
+  tbody.innerHTML = html;
+}
+
+function goToStep(idx) { currentIndex = idx; stopAutoPlay(); draw(); updateUI(); }
+
+function toggleMoveList() {
+  var el = document.getElementById('move-list');
+  el.style.display = (el.style.display === 'none' || !el.style.display) ? 'block' : 'none';
+}
+
+window.onload = init;
+<!--CLOSE_SCRIPT-->
+</body>
+</html>
+</script>
 
 <script>
 // ================================================================
@@ -1528,6 +1961,12 @@ class GameController {
     this.turnStartTime = null;
     this.elapsedTime = [0, 0];
 
+    this.isPaused = false;
+    this.pauseSeconds = 0;
+    this.pauseTimerInterval = null;
+    this.savedTimerSeconds = 60;
+    this.pauseStartTime = null;
+
     this.undoLocked = false;
 
     this.setupEvents();
@@ -1717,6 +2156,22 @@ class GameController {
     this.replayIndex = -1;
     this.elapsedTime = [0, 0];
     this.undoLocked = false;
+
+    // 重置暂停状态
+    this.isPaused = false;
+    this.pauseSeconds = 0;
+    this.savedTimerSeconds = 60;
+    if (this.pauseTimerInterval) {
+      clearInterval(this.pauseTimerInterval);
+      this.pauseTimerInterval = null;
+    }
+    document.getElementById('pause-overlay').classList.remove('show');
+    const pauseBtn = document.getElementById('btn-pause');
+    pauseBtn.textContent = '⏸ 暂停';
+    pauseBtn.classList.remove('active');
+    pauseBtn.disabled = false;
+    document.getElementById('btn-export').disabled = false;
+
     this.ui.hideResult();
     this.confetti.stop();
     this.renderer.viewCells = 15;
@@ -1752,7 +2207,7 @@ class GameController {
   }
 
   handleClick(e) {
-    if (this.gameOver || !this.gameStarted || this.isReplaying) return;
+    if (this.gameOver || !this.gameStarted || this.isReplaying || this.isPaused) return;
     if (this.mode === 'pvai' && this.currentPlayer === this.aiPlayer) return;
 
     const rect = this.canvas.getBoundingClientRect();
@@ -1763,7 +2218,7 @@ class GameController {
   }
 
   handleMouseMove(e) {
-    if (this.gameOver || !this.gameStarted || this.isReplaying) return;
+    if (this.gameOver || !this.gameStarted || this.isReplaying || this.isPaused) return;
     if (this.mode === 'pvai' && this.currentPlayer === this.aiPlayer) return;
 
     const rect = this.canvas.getBoundingClientRect();
@@ -1818,6 +2273,7 @@ class GameController {
   }
 
   aiMove() {
+    if (this.isPaused || this.gameOver) return;
     const move = this.ai.getMove();
     if (move) {
       this.makeMove(move.row, move.col);
@@ -1827,6 +2283,7 @@ class GameController {
   handleWin(player, winCells) {
     this.gameOver = true;
     this.stopTimer();
+    document.getElementById('btn-pause').disabled = true;
     this.renderer.startWinAnimation(winCells);
     this.updateUI();
 
@@ -1882,6 +2339,7 @@ class GameController {
   handleDraw() {
     this.gameOver = true;
     this.stopTimer();
+    document.getElementById('btn-pause').disabled = true;
     this.updateUI();
     setTimeout(() => {
       const box = document.getElementById('result-box');
@@ -1900,7 +2358,7 @@ class GameController {
   }
 
   undo() {
-    if (this.gameOver || !this.gameStarted || this.isReplaying) return;
+    if (this.gameOver || !this.gameStarted || this.isReplaying || this.isPaused) return;
     if (this.undoLocked) return;
 
     if (this.mode === 'pvai') {
@@ -1976,6 +2434,208 @@ class GameController {
       this.ui.showThinking();
       setTimeout(() => this.aiMove(), 2000 + Math.random() * 1000);
     }
+  }
+
+  togglePause() {
+    if (this.gameOver || !this.gameStarted || this.isReplaying) return;
+    if (this.isPaused) {
+      this.resumeGame();
+    } else {
+      this.pauseGame();
+    }
+  }
+
+  pauseGame() {
+    if (this.isPaused) return;
+    this.isPaused = true;
+
+    // 保存当前回合计时器剩余秒数
+    this.savedTimerSeconds = this.timerSeconds;
+
+    // 停止回合计时器
+    this.stopTimer();
+
+    // 记录暂停开始时间，用于计算暂停时长（不计入玩家思考时间）
+    this.pauseStartTime = Date.now();
+
+    // 启动暂停倒计时
+    this.pauseSeconds = 0;
+    this.updatePauseCountdown();
+    this.pauseTimerInterval = setInterval(() => {
+      this.pauseSeconds++;
+      this.updatePauseCountdown();
+    }, 1000);
+
+    // 显示暂停遮罩
+    document.getElementById('pause-overlay').classList.add('show');
+
+    // 更新面板显示暂停状态
+    document.getElementById('turn-left').textContent = '⏸ 已暂停';
+    document.getElementById('turn-left').className = 'turn-indicator inactive';
+    document.getElementById('turn-right').textContent = '⏸ 已暂停';
+    document.getElementById('turn-right').className = 'turn-indicator inactive';
+
+    // 更新按钮状态
+    const btn = document.getElementById('btn-pause');
+    btn.textContent = '▶ 继续';
+    btn.classList.add('active');
+
+    this.updateUI();
+  }
+
+  resumeGame() {
+    if (!this.isPaused) return;
+    this.isPaused = false;
+
+    // 停止暂停倒计时
+    if (this.pauseTimerInterval) {
+      clearInterval(this.pauseTimerInterval);
+      this.pauseTimerInterval = null;
+    }
+
+    // 恢复回合计时器（从保存的剩余秒数继续）
+    this.timerSeconds = this.savedTimerSeconds;
+    const activeSide = this.playerToPanel(this.currentPlayer) + 1;
+    this.turnStartTime = Date.now(); // 重新记录回合开始时间
+
+    this.timerInterval = setInterval(() => {
+      this.timerSeconds--;
+      this.ui.setTimer(activeSide, this.timerSeconds);
+      if (this.timerSeconds <= 0) {
+        this.handleTimeout();
+      }
+    }, 1000);
+
+    // 隐藏暂停遮罩
+    document.getElementById('pause-overlay').classList.remove('show');
+
+    // 更新按钮状态
+    const btn = document.getElementById('btn-pause');
+    btn.textContent = '⏸ 暂停';
+    btn.classList.remove('active');
+
+    this.updateUI();
+
+    // 如果是 AI 回合，恢复 AI 思考
+    if (this.mode === 'pvai' && this.currentPlayer === this.aiPlayer) {
+      this.ui.showThinking();
+      setTimeout(() => this.aiMove(), 2000 + Math.random() * 1000);
+    }
+  }
+
+  updatePauseCountdown() {
+    const el = document.getElementById('pause-countdown');
+    if (!el) return;
+    const min = Math.floor(this.pauseSeconds / 60);
+    const sec = this.pauseSeconds % 60;
+    const timeStr = min > 0
+      ? `${min} 分 ${sec.toString().padStart(2, '0')} 秒`
+      : `${sec} 秒`;
+    el.textContent = `已暂停 ${timeStr}`;
+  }
+
+  exportGame() {
+    if (!this.gameStarted) return;
+    if (this.board.history.length === 0) {
+      alert('棋局为空，无法导出。');
+      return;
+    }
+    // 显示导出弹窗，预填文件名
+    const now = new Date();
+    const dateStr = now.getFullYear() + '-' +
+      String(now.getMonth() + 1).padStart(2, '0') + '-' +
+      String(now.getDate()).padStart(2, '0') + '_' +
+      String(now.getHours()).padStart(2, '0') +
+      String(now.getMinutes()).padStart(2, '0');
+    const input = document.getElementById('input-export-filename');
+    const p1 = this.panelNames[0] || '黑方';
+    const p2 = this.panelNames[1] || '白方';
+    input.value = '五子棋_' + p1 + 'vs' + p2 + '_' + dateStr;
+    document.getElementById('modal-export').classList.add('show');
+    setTimeout(() => { input.focus(); input.select(); }, 100);
+  }
+
+  doExport() {
+    const input = document.getElementById('input-export-filename');
+    let filename = (input.value || '').trim();
+    if (!filename) filename = '五子棋对局';
+    filename = filename.replace(/[<>:"/\\|?*]/g, '_');
+    document.getElementById('modal-export').classList.remove('show');
+
+    const html = this.generateExportHTML();
+    const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename + '.html';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  generateExportHTML() {
+    const tmpl = document.getElementById('export-tmpl').textContent;
+    const moves = this.board.history.map(m => [m.row, m.col, m.player]);
+    const boardSize = this.board.size;
+    const leftName = this.panelNames[0] || '黑方';
+    const rightName = this.panelNames[1] || '白方';
+    const leftRole = this.panelRoles[0] || '';
+    const rightRole = this.panelRoles[1] || '';
+    const totalMoves = moves.length;
+    const dateStr = new Date().toLocaleString('zh-CN');
+
+    let resultText = '';
+    let resultClass = '';
+    if (this.gameOver) {
+      const lastMove = this.board.history[this.board.history.length - 1];
+      if (lastMove) {
+        const winCells = this.board.checkWin(lastMove.row, lastMove.col);
+        if (winCells) {
+          const winnerPanel = this.playerToPanel(lastMove.player);
+          resultText = (this.panelNames[winnerPanel] || '某方') + ' 获胜';
+          resultClass = 'win';
+        } else {
+          resultText = '平局';
+          resultClass = 'draw';
+        }
+      }
+    } else {
+      resultText = '未完局';
+      resultClass = 'ongoing';
+    }
+
+    let minR = boardSize, maxR = 0, minC = boardSize, maxC = 0;
+    if (moves.length > 0) {
+      for (const [r, c] of moves) {
+        if (r < minR) minR = r; if (r > maxR) maxR = r;
+        if (c < minC) minC = c; if (c > maxC) maxC = c;
+      }
+    }
+    const centerRow = moves.length > 0 ? (minR + maxR) / 2 : boardSize / 2;
+    const centerCol = moves.length > 0 ? (minC + maxC) / 2 : boardSize / 2;
+    const span = moves.length > 0 ? Math.max(maxR - minR, maxC - minC) + 6 : 15;
+    const viewCells = Math.max(15, Math.min(boardSize, span));
+
+    const resultHtml = resultText
+      ? '<span class="result-badge ' + resultClass + '">' + resultText + '</span>'
+      : '';
+
+    return tmpl
+      .replaceAll('{{TITLE}}', leftName + ' vs ' + rightName + ' - 五子棋对局回放')
+      .replaceAll('{{DATE}}', dateStr)
+      .replaceAll('{{LEFT_NAME}}', leftName)
+      .replaceAll('{{RIGHT_NAME}}', rightName)
+      .replaceAll('{{LEFT_ROLE}}', leftRole)
+      .replaceAll('{{RIGHT_ROLE}}', rightRole)
+      .replaceAll('{{RESULT_HTML}}', resultHtml)
+      .replaceAll('{{TOTAL_MOVES}}', totalMoves)
+      .replaceAll('{{MOVES}}', JSON.stringify(moves))
+      .replaceAll('{{BOARD_SIZE}}', boardSize)
+      .replaceAll('{{CENTER_ROW}}', centerRow)
+      .replaceAll('{{CENTER_COL}}', centerCol)
+      .replaceAll('{{VIEW_CELLS}}', viewCells)
+      .replaceAll('<!--CLOSE_SCRIPT-->', '</' + 'script>');
   }
 
   startReplay() {
