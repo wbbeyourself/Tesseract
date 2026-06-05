@@ -2365,6 +2365,10 @@ const Engine = {
             if (e.dropsPowerUp) {
               this.spawnPowerUp(e.x, e.y);
             }
+            // Boss celebration: fireworks + screen shake
+            if (e.isBoss) {
+              this.celebrateBossKill(e);
+            }
           }
           this.explosions.push(new Explosion(b.x + b.w/2, b.y + b.h/2, 'small'));
           break;
@@ -2445,26 +2449,40 @@ const Engine = {
   },
 
   spawnEnemy() {
-    const spawnCols = [1, 12, 23];
-    const col = spawnCols[this.enemies.length % 3];
-
-    // Boss every 5 stages
+    // Randomly spawn in the top half of the map (rows 0-12) to avoid base area
+    // Boss every 5 stages — also spawns randomly in top half
     if (this.stage % 5 === 0 && this.enemiesLeft === 10 + Math.floor(this.stage * 1.5)) {
-      const boss = new BossTank(tileToPixel(10), 0, this.stage);
-      this.enemies.push(boss);
-      this.enemiesLeft--;
+      const pos = this.findSpawnPos(C.BOSS_SIZE);
+      if (pos) {
+        const boss = new BossTank(pos.x, pos.y, this.stage);
+        this.enemies.push(boss);
+        this.enemiesLeft--;
+      }
       return;
     }
 
     const type = this.pickEnemyType();
-    const enemy = new EnemyTank(tileToPixel(col), 0, type, this.stage);
-    if (GameMap.collides(enemy.x, enemy.y, enemy.size, enemy.size) ||
-        this.enemies.some(e => e.alive && rectOverlap(enemy.getRect(), e.getRect())) ||
-        (Player.alive && rectOverlap(enemy.getRect(), Player.getRect()))) {
-      return;
-    }
+    const pos = this.findSpawnPos(C.TANK_SIZE);
+    if (!pos) return; // skip this tick if no valid position found
+    const enemy = new EnemyTank(pos.x, pos.y, type, this.stage);
     this.enemies.push(enemy);
     this.enemiesLeft--;
+  },
+
+  // Find a valid spawn position in the top half of the map
+  findSpawnPos(size) {
+    for (let attempt = 0; attempt < 15; attempt++) {
+      const col = randInt(1, C.COLS - 2);
+      const row = randInt(0, 12); // top half, far from base
+      const x = tileToPixel(col);
+      const y = tileToPixel(row);
+      if (!GameMap.collides(x, y, size, size) &&
+          !this.enemies.some(e => e.alive && rectOverlap({x, y, w: size, h: size}, e.getRect())) &&
+          !(Player.alive && rectOverlap({x, y, w: size, h: size}, Player.getRect()))) {
+        return { x, y };
+      }
+    }
+    return null;
   },
 
   pickEnemyType() {
@@ -2482,6 +2500,34 @@ const Engine = {
       if (r <= 0) return available[i][1];
     }
     return available[0][1];
+  },
+
+  // Boss kill celebration: multi-color fireworks + screen shake
+  celebrateBossKill(e) {
+    const cx = e.x + e.size / 2;
+    const cy = e.y + e.size / 2;
+    // Screen shake
+    this.shake(12, 40);
+    // Multi-color firework bursts
+    const colors = ['#FF4400', '#FFD700', '#00FF88', '#4488FF', '#FF44FF', '#FFFFFF'];
+    for (let i = 0; i < 6; i++) {
+      const ox = cx + (Math.random() - 0.5) * 80;
+      const oy = cy + (Math.random() - 0.5) * 80;
+      Particles.emit(ox, oy, 20, colors[i], 3, 40);
+    }
+    // Extra large explosions at staggered positions
+    for (let i = 0; i < 3; i++) {
+      setTimeout(() => {
+        if (this.state === 'playing' || this.state === 'stageClear') {
+          const ox = cx + (Math.random() - 0.5) * 100;
+          const oy = cy + (Math.random() - 0.5) * 100;
+          this.explosions.push(new Explosion(ox, oy, 'large'));
+          Particles.emit(ox, oy, 15, colors[randInt(0, colors.length - 1)], 4, 50);
+        }
+      }, i * 200);
+    }
+    // Play celebratory sound
+    Audio.levelUp();
   },
 
   spawnPowerUp(x, y) {
