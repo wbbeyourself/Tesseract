@@ -19,6 +19,7 @@ body {
   position: relative;
   display: flex;
   flex-shrink: 0;
+  transform-origin: center center;
 }
 #gameCanvas {
   display: block;
@@ -2950,11 +2951,24 @@ const Engine = {
 };
 
 // ===== BOOT =====
+function resizeGame() {
+  const container = document.getElementById('gameContainer');
+  if (!container) return;
+  const totalW = 120 + 2 + 832 + 2 + 120 + 2 + 2;  // panels + borders + canvas
+  const totalH = 832 + 2 + 2;                         // canvas + borders
+  const scaleX = window.innerWidth / totalW;
+  const scaleY = window.innerHeight / totalH;
+  const scale = Math.min(scaleX, scaleY, 1);
+  container.style.transform = 'scale(' + scale + ')';
+}
+window.addEventListener('resize', resizeGame);
+
 document.addEventListener('DOMContentLoaded', () => {
   Sprites.init();
   Audio.init();
   UI.init();
   Engine.init();
+  resizeGame();
 });
 </script>
 </body>
