@@ -11,15 +11,13 @@ body {
   display: flex;
   justify-content: center;
   align-items: center;
+  width: 100vw;
   height: 100vh;
   overflow: hidden;
   font-family: monospace;
 }
 #gameContainer {
-  position: relative;
   display: flex;
-  flex-shrink: 0;
-  transform-origin: center center;
 }
 #gameCanvas {
   display: block;
@@ -36,7 +34,6 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  flex-shrink: 0;
   overflow: hidden;
 }
 #controlsHint { display: none; }
@@ -2954,12 +2951,13 @@ const Engine = {
 function resizeGame() {
   const container = document.getElementById('gameContainer');
   if (!container) return;
-  const totalW = 120 + 2 + 832 + 2 + 120 + 2 + 2;  // panels + borders + canvas
-  const totalH = 832 + 2 + 2;                         // canvas + borders
-  const scaleX = window.innerWidth / totalW;
-  const scaleY = window.innerHeight / totalH;
-  const scale = Math.min(scaleX, scaleY, 1);
-  container.style.transform = 'scale(' + scale + ')';
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  // Actual layout: panels 120px each (border-box) + canvas 832+4=836px = 1076×836
+  const gameW = 120 + 836 + 120;  // 1076
+  const gameH = 836;
+  const scale = Math.min(vw / gameW, vh / gameH, 1);
+  container.style.zoom = scale;
 }
 window.addEventListener('resize', resizeGame);
 
