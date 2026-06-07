@@ -54,6 +54,50 @@ body {
   height: 16px;
   background: #888;
 }
+.enemy-overflow {
+  color: #F0F0F0;
+  font-size: 18px;
+  line-height: 1.4;
+  text-align: center;
+}
+.enemy-count {
+  color: #FFD700;
+  font-size: 16px;
+}
+.enemy-status {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+}
+.enemy-progress {
+  position: relative;
+  width: 16px;
+  height: 180px;
+  flex: 0 0 16px;
+  overflow: hidden;
+  background: #222;
+  border: 1px solid #666;
+}
+.enemy-progress-fill {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: #D44;
+}
+.enemy-progress-percent {
+  margin-top: 8px;
+  color: #FFD700;
+  font-size: 14px;
+}
+.enemy-progress-label {
+  margin-top: 3px;
+  color: #F0F0F0;
+  font-size: 11px;
+  white-space: nowrap;
+}
 #controlsHint { display: none; }
 </style>
 </head>
@@ -1647,13 +1691,25 @@ const HUD = {
   updateLeftPanel() {
     const panel = document.getElementById('leftPanel');
     const remaining = Engine.enemiesLeft + Engine.enemies.filter(e => e.alive).length;
+    const total = Math.max(Engine.totalEnemies, remaining, 1);
+    const remainingPct = Math.round(remaining / total * 100);
+    const maxEnemyIcons = 32;
     let html = '<div style="color:#F0F0F0;font-size:16px;margin-bottom:8px;text-align:center;">ENEMY</div>';
-    html += '<div class="enemy-grid">';
-    // Show small tank icons for remaining enemies
-    for (let i = 0; i < remaining; i++) {
-      html += '<div class="enemy-icon"></div>';
+    html += '<div class="enemy-status"><div>';
+    if (remaining > maxEnemyIcons) {
+      html += `<div class="enemy-overflow">…<div class="enemy-count">× ${remaining}</div></div>`;
+    } else {
+      html += '<div class="enemy-grid">';
+      for (let i = 0; i < remaining; i++) {
+        html += '<div class="enemy-icon"></div>';
+      }
+      html += '</div>';
     }
-    html += '</div>';
+    html += `</div><div class="enemy-progress" title="剩余 ${remaining} / ${total}">
+      <div class="enemy-progress-fill" style="height:${remainingPct}%"></div>
+    </div></div>
+    <div class="enemy-progress-percent">${remainingPct}%</div>
+    <div class="enemy-progress-label">剩余 ${remaining} / ${total}</div>`;
     panel.innerHTML = html;
   },
 
@@ -2438,6 +2494,7 @@ const Engine = {
   powerUps: [],
   // Stage state
   enemiesLeft: 0,      // total enemies remaining to spawn
+  totalEnemies: 0,
   maxOnScreen: 4,
   spawnTimer: 0,
   spawnInterval: 180,  // ticks between spawns
@@ -2564,6 +2621,7 @@ const Engine = {
     this.shakeIntensity = 0;
     // Difficulty params
     this.enemiesLeft = 10 + Math.floor(this.stage * 1.5);
+    this.totalEnemies = this.enemiesLeft;
     this.maxOnScreen = Math.min(4 + Math.floor(this.stage / 4), 8);
     this.spawnInterval = Math.max(90, Math.floor(240 - this.stage * 6));
     this.spawnTimer = 60;
