@@ -109,6 +109,90 @@ const C = {
   COL_HUD_BG: '#1a1a1a',
 };
 
+// ===== LEVEL NAMES =====
+const LEVEL_NAMES = [
+  '初阵',       // 1
+  '前哨站',     // 2
+  '丛林突击',   // 3
+  '河岸防线',   // 4
+  '钢铁堡垒',   // 5  (Boss)
+  '街巷混战',   // 6
+  '桥头堡',     // 7
+  '碉堡群',     // 8
+  '铁路线',     // 9
+  '重装要塞',   // 10 (Boss)
+  '谷地伏击',   // 11
+  '沙漠风暴',   // 12
+  '废墟之城',   // 13
+  '密林深处',   // 14
+  '暗夜奇袭',   // 15 (Boss)
+  '双重包围',   // 16
+  '水坝之战',   // 17
+  '弹药库',     // 18
+  '雪山隘口',   // 19
+  '铁幕壁垒',   // 20 (Boss)
+  '游击战',     // 21
+  '突围行动',   // 22
+  '地堡迷宫',   // 23
+  '火线冲锋',   // 24
+  '猛虎之巢',   // 25 (Boss)
+  '悬崖要道',   // 26
+  '沼泽地带',   // 27
+  '据点争夺',   // 28
+  '工业基地',   // 29
+  '钢铁洪流',   // 30 (Boss)
+  '破晓之战',   // 31
+  '断桥残影',   // 32
+  '要塞外围',   // 33
+  '最后防线',   // 34
+  '经典终章',   // 35 (Boss)
+  '迷宫入口',   // 36
+  '迂回之路',   // 37
+  '蛇形走廊',   // 38
+  '迷宫深处',   // 39
+  '迷宫之心',   // 40 (Boss)
+  '开阔平原',   // 41
+  '无遮之战',   // 42
+  '奔袭千里',   // 43
+  '河川天险',   // 44
+  '渡河战役',   // 45 (Boss)
+  '岛屿之争',   // 46
+  '水路纵横',   // 47
+  '浮桥攻势',   // 48
+  '深渊水域',   // 49
+  '海王之怒',   // 50 (Boss)
+  '钢墙铁壁',   // 51
+  '要塞入侵',   // 52
+  '核心区域',   // 53
+  '地下通道',   // 54
+  '混合战场',   // 55 (Boss)
+  '焦土作战',   // 56
+  '多线作战',   // 57
+  '环形防线',   // 58
+  '交叉火力',   // 59
+  '终极试炼',   // 60 (Boss)
+  '绝境逢生',   // 61
+  '以寡敌众',   // 62
+  '四面楚歌',   // 63
+  '背水一战',   // 64
+  '龙之巢穴',   // 65 (Boss)
+  '暗影行动',   // 66
+  '猎杀时刻',   // 67
+  '钢铁收割',   // 68
+  '黎明突袭',   // 69
+  '暴风前线',   // 70 (Boss)
+  '烈焰走廊',   // 71
+  '死亡迷阵',   // 72
+  '无限战场',   // 73
+  '全地形战',   // 74
+  '传奇之战',   // 75 (Boss)
+  '逆风翻盘',   // 76
+  '绝命逃亡',   // 77
+  '天罗地网',   // 78
+  '最终序曲',   // 79
+  '永恒之城',   // 80 (Boss)
+];
+
 // ===== UTILS =====
 function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 function randInt(lo, hi) { return lo + Math.floor(Math.random() * (hi - lo + 1)); }
@@ -1620,6 +1704,9 @@ const UI = {
   slotMode: null,         // 'new' | 'load' | null
   slotNameInput: '',
   slotConfirmDelete: -1,
+  // Level select state
+  levelSelectIndex: 0,
+  levelSelectScroll: 0,
 
   init() {
     this.loadSettings();
@@ -2085,7 +2172,9 @@ const UI = {
     }
     if (Input.wasPressed('Enter') && this.slotNameInput.length >= 1) {
       Audio.menuConfirm();
-      Engine.startGame(this.slotIndex, this.slotNameInput);
+      this.levelSelectIndex = 0;
+      this.levelSelectScroll = 0;
+      Engine.setState('levelSelect');
     }
     if (Input.wasPressed('Escape')) {
       Audio.menuSelect();
@@ -2125,6 +2214,128 @@ const UI = {
     }
     if (Input.wasPressed('Escape')) {
       this.slotConfirmDelete = -1;
+      Audio.menuSelect();
+      Engine.setState('slotSelect');
+    }
+  },
+
+  // ===== Level Select UI =====
+  renderLevelSelect(ctx) {
+    ctx.fillStyle = C.COL_BG;
+    ctx.fillRect(0, 0, C.STAGE_W, C.STAGE_H);
+
+    ctx.fillStyle = '#FFD700';
+    ctx.font = 'bold 24px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('选择关卡', C.STAGE_W / 2, 45);
+
+    const cols = 3;
+    const rowH = 34;
+    const startY = 75;
+    const colW = 260;
+    const startX = (C.STAGE_W - cols * colW) / 2;
+    const visibleRows = 18;
+    const total = LEVEL_NAMES.length;
+
+    for (let i = 0; i < visibleRows && (this.levelSelectScroll + i) < total; i++) {
+      const idx = this.levelSelectScroll + i;
+      const col = idx % cols;
+      const row = Math.floor(i / cols);
+      const x = startX + col * colW;
+      const y = startY + row * rowH;
+      const isBoss = (idx + 1) % 5 === 0;
+      const selected = idx === this.levelSelectIndex;
+
+      if (selected) {
+        ctx.fillStyle = 'rgba(255,215,0,0.15)';
+        ctx.fillRect(x - 5, y - 16, colW - 10, rowH - 4);
+      }
+
+      // Level number
+      ctx.fillStyle = selected ? '#FFD700' : '#888';
+      ctx.font = '14px Arial, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(selected ? '▶ ' : '  ', x, y);
+
+      // Number + name
+      const num = String(idx + 1).padStart(2, ' ');
+      ctx.fillStyle = selected ? '#FFF' : (isBoss ? '#F88' : '#CCC');
+      ctx.font = selected ? 'bold 15px Arial, sans-serif' : '14px Arial, sans-serif';
+      ctx.fillText(`${num}. ${LEVEL_NAMES[idx]}${isBoss ? ' ★' : ''}`, x + 20, y);
+    }
+
+    // Scroll bar
+    const barX = C.STAGE_W - 20;
+    const barY = startY;
+    const barH = visibleRows / cols * rowH;
+    ctx.fillStyle = '#333';
+    ctx.fillRect(barX, barY, 8, barH);
+    const scrollPct = this.levelSelectScroll / total;
+    const thumbH = Math.max(20, barH * (visibleRows / (total / cols)));
+    ctx.fillStyle = '#FFD700';
+    ctx.fillRect(barX, barY + scrollPct * barH, 8, thumbH);
+
+    // Page info
+    const page = Math.floor(this.levelSelectIndex / (visibleRows)) + 1;
+    const totalPages = Math.ceil(total / visibleRows);
+    ctx.fillStyle = '#888';
+    ctx.font = '13px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`${page} / ${totalPages}  共 ${total} 关`, C.STAGE_W / 2, C.STAGE_H - 55);
+
+    // Controls
+    ctx.fillStyle = '#E0E0E0';
+    ctx.font = '13px Arial, sans-serif';
+    ctx.fillText('↑↓←→ 选择  PageUp/PageDown 翻页  Enter 确认  Esc 返回', C.STAGE_W / 2, C.STAGE_H - 30);
+  },
+
+  updateLevelSelect() {
+    const cols = 3;
+    const visibleRows = 18;
+    const perPage = visibleRows;
+    const total = LEVEL_NAMES.length;
+
+    if (Input.wasPressed('ArrowUp')) {
+      this.levelSelectIndex = Math.max(0, this.levelSelectIndex - cols);
+      Audio.menuSelect();
+    }
+    if (Input.wasPressed('ArrowDown')) {
+      this.levelSelectIndex = Math.min(total - 1, this.levelSelectIndex + cols);
+      Audio.menuSelect();
+    }
+    if (Input.wasPressed('ArrowLeft')) {
+      if (this.levelSelectIndex % cols > 0) { this.levelSelectIndex--; Audio.menuSelect(); }
+    }
+    if (Input.wasPressed('ArrowRight')) {
+      if (this.levelSelectIndex % cols < cols - 1 && this.levelSelectIndex < total - 1) { this.levelSelectIndex++; Audio.menuSelect(); }
+    }
+    if (Input.wasPressed('PageUp')) {
+      this.levelSelectIndex = Math.max(0, this.levelSelectIndex - perPage);
+      Audio.menuSelect();
+    }
+    if (Input.wasPressed('PageDown')) {
+      this.levelSelectIndex = Math.min(total - 1, this.levelSelectIndex + perPage);
+      Audio.menuSelect();
+    }
+
+    // Auto-scroll to keep selected item visible
+    const currentRow = Math.floor(this.levelSelectIndex / cols);
+    const scrollRow = Math.floor(this.levelSelectScroll / cols);
+    const maxVisibleRow = scrollRow + visibleRows / cols - 1;
+    if (currentRow < scrollRow) {
+      this.levelSelectScroll = currentRow * cols;
+    } else if (currentRow > maxVisibleRow) {
+      this.levelSelectScroll = Math.max(0, (currentRow - visibleRows / cols + 1) * cols);
+    }
+
+    // Confirm
+    if (Input.wasPressed('Enter')) {
+      Audio.menuConfirm();
+      Engine.startGameAtLevel(this.slotIndex, this.slotNameInput, this.levelSelectIndex + 1);
+    }
+
+    // Back
+    if (Input.wasPressed('Escape')) {
       Audio.menuSelect();
       Engine.setState('slotSelect');
     }
@@ -2273,6 +2484,7 @@ const Engine = {
       case 'slotSelect': UI.updateSlotSelect(); break;
       case 'nameEntry': UI.updateNameEntry(); break;
       case 'deleteConfirm': UI.updateDeleteConfirm(); break;
+      case 'levelSelect': UI.updateLevelSelect(); break;
     }
   },
 
@@ -2289,6 +2501,26 @@ const Engine = {
     const saves = UI._getSaves();
     saves[slotIndex] = {
       name: playerName, stage: 1, lives: 3, level: 1,
+      xp: 0, skillPoints: 0, skills: { fire: 0, defense: 0, mobility: 0 },
+      totalScore: 0, kills: 0, date: new Date().toLocaleDateString(),
+    };
+    UI._setSaves(saves);
+    Player.reset();
+    this.loadStage();
+  },
+
+  startGameAtLevel(slotIndex, playerName, stage) {
+    this.currentSlot = slotIndex;
+    this.stage = stage;
+    this.score = 0;
+    this.kills = 0;
+    this.xp = 0;
+    this.skillPoints = 0;
+    this._goSnd = false;
+    UI._goAutoSaved = false;
+    const saves = UI._getSaves();
+    saves[slotIndex] = {
+      name: playerName, stage: stage, lives: C.P_INIT_LIVES, level: 1,
       xp: 0, skillPoints: 0, skills: { fire: 0, defense: 0, mobility: 0 },
       totalScore: 0, kills: 0, date: new Date().toLocaleDateString(),
     };
@@ -2622,6 +2854,7 @@ const Engine = {
       case 'slotSelect': UI.renderSlotSelect(ctx); break;
       case 'nameEntry': UI.renderNameEntry(ctx); break;
       case 'deleteConfirm': UI.renderDeleteConfirm(ctx); break;
+      case 'levelSelect': UI.renderLevelSelect(ctx); break;
     }
   },
 
