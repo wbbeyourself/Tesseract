@@ -9,7 +9,6 @@
 body {
   background: #111;
   display: flex;
-  flex-direction: column;
   justify-content: center;
   align-items: center;
   height: 100vh;
@@ -23,11 +22,10 @@ body {
 }
 #gameCanvas {
   display: block;
-  width: 832px;
-  height: 832px;
   border: 2px solid #555;
   image-rendering: pixelated;
   image-rendering: crisp-edges;
+  box-sizing: content-box;
 }
 #leftPanel, #rightPanel {
   width: 120px;
@@ -40,6 +38,7 @@ body {
   flex-shrink: 0;
   overflow: hidden;
 }
+#controlsHint { display: none; }
 </style>
 </head>
 <body>
@@ -1663,6 +1662,16 @@ const HUD = {
       <div style="color:#4AF;font-size:13px;">🛡${Player.skills.defense}</div>
       <div style="color:#4F4;font-size:13px;">⚡${Player.skills.mobility}</div>
     `;
+    // Controls hint (moved into right panel)
+    html += `
+      <div style="margin-top:auto;padding-top:10px;border-top:1px solid #FFD700;width:100%;">
+        <div style="color:#FFD700;font-size:11px;text-align:center;">操作</div>
+        <div style="color:#FFF;font-size:10px;margin-top:3px;"><span style="color:#0FF;">↑↓←→</span> 移动</div>
+        <div style="color:#FFF;font-size:10px;margin-top:1px;"><span style="color:#0FF;">Space</span> 射击</div>
+        <div style="color:#FFF;font-size:10px;margin-top:1px;"><span style="color:#0FF;">P</span> 暂停</div>
+        <div style="color:#FFF;font-size:10px;margin-top:1px;"><span style="color:#0FF;">T</span> 技能树</div>
+      </div>
+    `;
     // Boss HP bar
     const boss = Engine.enemies.find(e => e.isBoss && e.alive);
     if (boss) {
@@ -1676,17 +1685,6 @@ const HUD = {
       `;
     }
     panel.innerHTML = html;
-    // Controls hint at bottom of right panel
-    const hint = document.getElementById('controlsHint');
-    if (hint) {
-      hint.innerHTML = `
-        <div style="color:#FFD700;font-size:12px;margin-top:10px;border-top:1px solid #FFD700;padding-top:8px;">操作说明</div>
-        <div style="color:#FFF;font-size:11px;margin-top:4px;"><span style="color:#0FF;">↑↓←→</span> 移动</div>
-        <div style="color:#FFF;font-size:11px;margin-top:2px;"><span style="color:#0FF;">Space</span> 射击</div>
-        <div style="color:#FFF;font-size:11px;margin-top:2px;"><span style="color:#0FF;">P</span> 暂停</div>
-        <div style="color:#FFF;font-size:11px;margin-top:2px;"><span style="color:#0FF;">T</span> 技能树</div>
-      `;
-    }
   },
 };
 
